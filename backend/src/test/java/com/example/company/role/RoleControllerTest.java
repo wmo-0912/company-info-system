@@ -7,16 +7,21 @@ import com.example.company.role.dto.RoleRequest;
 import com.example.company.role.entity.SysPermission;
 import com.example.company.role.entity.SysRole;
 import com.example.company.role.mapper.SysPermissionMapper;
+import com.example.company.role.entity.SysRoleModuleScope;
 import com.example.company.role.mapper.SysRoleMapper;
+import com.example.company.role.mapper.SysRoleModuleScopeMapper;
 import com.example.company.role.mapper.SysRolePermissionMapper;
 import com.example.company.role.vo.RoleVO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +33,8 @@ class RoleControllerTest {
 
     @Mock
     private SysRoleMapper roleMapper;
+    @Mock
+    private SysRoleModuleScopeMapper roleModuleScopeMapper;
     @Mock
     private SysPermissionMapper permissionMapper;
     @Mock
@@ -150,5 +157,76 @@ class RoleControllerTest {
 
         verify(rolePermissionMapper).delete(any());
         verify(rolePermissionMapper).insert(any(com.example.company.role.entity.SysRolePermission.class));
+    }
+
+    @Test
+    void saveModuleScopesRejectsUnknownModule() {
+        when(roleMapper.selectById(3L)).thenReturn(role(3L, "CUSTOM", true, "SELF"));
+        Map<String, String> scopes = new HashMap<>();
+        scopes.put("SALARY", "ALL");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.saveModuleScopes(3L, moduleBody(scopes)));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("未知的模块编码"));
+        verify(roleModuleScopeMapper, never()).insert(any(SysRoleModuleScope.class));
+    }
+
+    @Test
+    void saveModuleScopesRejectsIllegalScope() {
+        when(roleMapper.selectById(3L)).thenReturn(role(3L, "CUSTOM", true, "SELF"));
+        Map<String, String> scopes = new HashMap<>();
+        scopes.put("PERFORMANCE", "TEAM");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.saveModuleScopes(3L, moduleBody(scopes)));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("未知的数据范围"));
+        verify(roleModuleScopeMapper, never()).insert(any(SysRoleModuleScope.class));
+    }
+
+    @Test
+    void saveModuleScopesKeepsAdminAtAll() {
+        when(roleMapper.selectById(1L)).thenReturn(role(1L, "ADMIN", true, "ALL"));
+        Map<String, String> scopes = new HashMap<>();
+        scopes.put("PERFORMANCE", "SELF");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> controller.saveModuleScopes(1L, moduleBody(scopes)));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("必须全部为 ALL"));
+        verify(roleModuleScopeMapper, never()).insert(any(SysRoleModuleScope.class));
+    }
+
+    @Test
+    void saveModuleScopesReplacesOverridesAndNormalizes() {
+        when(roleMapper.selectById(3L)).thenReturn(role(3L, "CUSTOM", true, "SELF"));
+        when(permissionMapper.selectByRoleId(3L)).thenReturn(List.of());
+        SysRoleModuleScope saved = new SysRoleModuleScope();
+        saved.setRoleId(3L);
+        saved.setModuleCode("PERFORMANCE");
+        saved.setScopeType("DEPARTMENT");
+        when(roleModuleScopeMapper.selectList(any())).thenReturn(List.of(saved));
+        Map<String, String> scopes = new HashMap<>();
+        scopes.put(" performance ", "department");
+        scopes.put("EMPLOYEE", "  ");
+
+        RoleVO vo = controller.saveModuleScopes(3L, moduleBody(scopes)).getData();
+
+        verify(roleModuleScopeMapper).delete(any());
+        ArgumentCaptor<SysRoleModuleScope> captor = ArgumentCaptor.forClass(SysRoleModuleScope.class);
+        verify(roleModuleScopeMapper).insert(captor.capture());
+        assertEquals("PERFORMANCE", captor.getValue().getModuleCode());
+        assertEquals("DEPARTMENT", captor.getValue().getScopeType());
+        assertEquals("DEPARTMENT", vo.getModuleScopes().get("PERFORMANCE"));
+    }
+
+    private RoleController.ModuleScopesBody moduleBody(Map<String, String> scopes) {
+        RoleController.ModuleScopesBody body = new RoleController.ModuleScopesBody();
+        body.setModuleScopes(scopes);
+        return body;
     }
 }

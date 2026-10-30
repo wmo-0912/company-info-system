@@ -195,7 +195,7 @@ class PerformanceServiceImplTest {
     @DisplayName("没有任何可见员工时列表直接返回空页，不查库")
     void pageReturnsEmptyWhenNoVisibleEmployees() {
         loginUser(7L, "SELF");
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of());
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of());
 
         var page = service.page(1, 10, null, null, null);
 
@@ -208,7 +208,7 @@ class PerformanceServiceImplTest {
     @DisplayName("列表按统一数据范围过滤：本人评价 + 范围内被评价的非草稿记录")
     void pageAppliesUnifiedDataScope() {
         loginUser(7L, "PROJECT");
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of(7L, 11L));
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(7L, 11L));
         when(reviewMapper.selectPage(any(), any())).thenReturn(new Page<>());
 
         service.page(1, 10, null, null, null);
@@ -228,7 +228,7 @@ class PerformanceServiceImplTest {
     @DisplayName("详情：范围外的记录 403")
     void detailRejectsRecordOutsideScope() {
         loginUser(7L, "PROJECT");
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of(7L));
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(7L));
         when(reviewMapper.selectById(1L)).thenReturn(review(1L, 11L, 999L, ReviewStatus.SUBMITTED.name()));
 
         BusinessException ex = assertThrows(BusinessException.class, () -> service.detail(1L));
@@ -239,7 +239,7 @@ class PerformanceServiceImplTest {
     @DisplayName("详情：被评价人看不到草稿")
     void detailHidesDraftFromSubject() {
         loginUser(11L, "SELF");
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of(11L));
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(11L));
         when(reviewMapper.selectById(1L)).thenReturn(review(1L, 11L, 7L, ReviewStatus.DRAFT.name()));
 
         BusinessException ex = assertThrows(BusinessException.class, () -> service.detail(1L));
@@ -250,7 +250,7 @@ class PerformanceServiceImplTest {
     @DisplayName("详情：被评价人可见已提交评价")
     void detailAllowsSubmittedForSubject() {
         loginUser(11L, "SELF");
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of(11L));
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(11L));
         PerformanceReview r = review(1L, 11L, 7L, ReviewStatus.SUBMITTED.name());
         when(reviewMapper.selectById(1L)).thenReturn(r);
         when(employeeMapper.selectById(11L)).thenReturn(null);

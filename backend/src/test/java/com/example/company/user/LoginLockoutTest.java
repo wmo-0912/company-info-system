@@ -4,6 +4,7 @@ import com.example.company.audit.service.AuditService;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.config.JwtTokenProvider;
 import com.example.company.employee.mapper.EmployeeMapper;
+import com.example.company.role.mapper.SysRoleModuleScopeMapper;
 import com.example.company.role.mapper.SysPermissionMapper;
 import com.example.company.role.mapper.SysRoleMapper;
 import com.example.company.user.dto.LoginRequest;
@@ -40,6 +41,8 @@ class LoginLockoutTest {
     private SysUserMapper userMapper;
     @Mock
     private SysRoleMapper roleMapper;
+    @Mock
+    private SysRoleModuleScopeMapper roleModuleScopeMapper;
     @Mock
     private SysPermissionMapper permissionMapper;
     @Mock

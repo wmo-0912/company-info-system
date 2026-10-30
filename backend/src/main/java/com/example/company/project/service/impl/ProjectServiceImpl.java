@@ -2,6 +2,7 @@ package com.example.company.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
@@ -50,7 +51,7 @@ public class ProjectServiceImpl implements ProjectService {
         LoginUser current = SecurityUtils.getCurrentUser();
         QueryWrapper<ProjectTeam> qw = new QueryWrapper<>();
         // PROJECT 数据范围：仅自己负责或自己参与的项目组
-        if ("PROJECT".equals(current.getDataScope()) && current.getEmployeeId() != null) {
+        if ("PROJECT".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT)) && current.getEmployeeId() != null) {
             List<Long> memberTeamIds = memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
                             .eq("employee_id", current.getEmployeeId()).isNull("left_at"))
                     .stream().map(ProjectTeamMember::getProjectTeamId).toList();
@@ -60,7 +61,7 @@ public class ProjectServiceImpl implements ProjectService {
                     w.or().in("id", memberTeamIds);
                 }
             });
-        } else if ("SELF".equals(current.getDataScope())) {
+        } else if ("SELF".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT))) {
             if (current.getEmployeeId() == null) {
                 return PageResponse.of(List.of(), page, pageSize, 0);
             }
@@ -216,7 +217,7 @@ public class ProjectServiceImpl implements ProjectService {
 
     /** 读操作校验：项目组必须在当前用户数据范围内，避免按 ID 直查越权 */
     private void assertVisible(ProjectTeam team) {
-        if (!dataScopeService.canAccessProject(SecurityUtils.getCurrentUser(), team)) {
+        if (!dataScopeService.canAccessProject(SecurityUtils.getCurrentUser(), team, DataModule.PROJECT)) {
             throw BusinessException.forbidden("无权查看该项目组");
         }
     }
@@ -224,7 +225,8 @@ public class ProjectServiceImpl implements ProjectService {
     /** 管理操作校验：拥有全局权限或本人是负责人 */
     private void assertManageable(ProjectTeam team) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        if (current.hasPermission("project:update") && !"PROJECT".equals(current.getDataScope())) {
+        if (current.hasPermission("project:update")
+                && !"PROJECT".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT))) {
             return;
         }
         if (current.getEmployeeId() != null && current.getEmployeeId().equals(team.getManagerEmployeeId())) {

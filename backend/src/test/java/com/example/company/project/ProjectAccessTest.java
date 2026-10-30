@@ -85,7 +85,7 @@ class ProjectAccessTest {
     @Test
     void detailRejectedWhenOutsideDataScope() {
         when(teamMapper.selectById(100L)).thenReturn(team());
-        when(dataScopeService.canAccessProject(any(), any())).thenReturn(false);
+        when(dataScopeService.canAccessProject(any(), any(), any())).thenReturn(false);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> service.detail(100L));
         assertEquals(403, ex.getHttpStatus());
@@ -95,7 +95,7 @@ class ProjectAccessTest {
     @Test
     void membersRejectedWhenOutsideDataScope() {
         when(teamMapper.selectById(100L)).thenReturn(team());
-        when(dataScopeService.canAccessProject(any(), any())).thenReturn(false);
+        when(dataScopeService.canAccessProject(any(), any(), any())).thenReturn(false);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> service.members(100L));
         assertEquals(403, ex.getHttpStatus());
@@ -105,7 +105,7 @@ class ProjectAccessTest {
     @Test
     void detailAllowedWhenInsideDataScope() {
         when(teamMapper.selectById(100L)).thenReturn(team());
-        when(dataScopeService.canAccessProject(any(), any())).thenReturn(true);
+        when(dataScopeService.canAccessProject(any(), any(), any())).thenReturn(true);
         Employee manager = new Employee();
         manager.setId(7L);
         manager.setEmployeeName("张经理");
@@ -121,7 +121,7 @@ class ProjectAccessTest {
     @Test
     void membersAllowedWhenInsideDataScope() {
         when(teamMapper.selectById(100L)).thenReturn(team());
-        when(dataScopeService.canAccessProject(any(), any())).thenReturn(true);
+        when(dataScopeService.canAccessProject(any(), any(), any())).thenReturn(true);
         ProjectTeamMember member = new ProjectTeamMember();
         member.setId(1L);
         member.setProjectTeamId(100L);

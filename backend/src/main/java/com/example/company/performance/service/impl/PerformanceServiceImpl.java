@@ -2,6 +2,7 @@ package com.example.company.performance.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.PeriodType;
@@ -71,7 +72,7 @@ public class PerformanceServiceImpl implements PerformanceService {
      * @return false 表示当前用户没有任何可见员工，直接返回空页
      */
     private boolean applyScope(QueryWrapper<PerformanceReview> qw, LoginUser current) {
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.PERFORMANCE);
         if (visible == null) {
             return true; // ALL：全部可见
         }
@@ -93,7 +94,7 @@ public class PerformanceServiceImpl implements PerformanceService {
     public PerformanceReviewVO detail(Long id) {
         PerformanceReview review = requireReview(id);
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.PERFORMANCE);
         if (visible == null) {
             return toVO(review); // 全公司范围（管理员/人事）
         }
@@ -254,7 +255,8 @@ public class PerformanceServiceImpl implements PerformanceService {
             throw BusinessException.badRequest("被评价员工不存在");
         }
         if (current.hasPermission("performance:create")
-                && ("ALL".equals(current.getDataScope()) || "DEPARTMENT".equals(current.getDataScope()))) {
+                && ("ALL".equals(dataScopeService.effectiveScope(current, DataModule.PERFORMANCE))
+                || "DEPARTMENT".equals(dataScopeService.effectiveScope(current, DataModule.PERFORMANCE)))) {
             return; // 人事/管理员按授权评价
         }
         // 项目经理：被评价人必须是其负责项目组的有效成员
@@ -280,7 +282,7 @@ public class PerformanceServiceImpl implements PerformanceService {
         LoginUser current = SecurityUtils.getCurrentUser();
         boolean isOwner = review.getReviewerEmployeeId().equals(current.getEmployeeId());
         boolean isAdmin = current.hasPermission("performance:update")
-                && ("ALL".equals(current.getDataScope()));
+                && ("ALL".equals(dataScopeService.effectiveScope(current, DataModule.PERFORMANCE)));
         if (!isOwner && !isAdmin) {
             throw BusinessException.forbidden("只能操作本人创建的评价");
         }

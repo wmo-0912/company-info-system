@@ -1,5 +1,6 @@
 package com.example.company.common.security;
 
+import com.example.company.common.enums.DataModule;
 import com.example.company.common.enums.DataScopeType;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.project.entity.ProjectTeamMember;
@@ -35,17 +36,40 @@ public class DataScopeService {
     private final EmployeeMapper employeeMapper;
 
     /**
-     * 计算当前用户可见的员工 ID 集合。
+     * 计算当前用户可见的员工 ID 集合（按角色默认数据范围）。
      *
      * @return null 表示可见全部；空集合表示不可见任何员工
      */
     public Set<Long> visibleEmployeeIds(LoginUser user) {
-        return switch (parseScope(user.getDataScope())) {
+        return visibleEmployeeIds(user, null);
+    }
+
+    /**
+     * 计算当前用户在指定模块可见的员工 ID 集合：模块级配置优先于角色级默认值。
+     */
+    public Set<Long> visibleEmployeeIds(LoginUser user, DataModule module) {
+        return switch (parseScope(effectiveScope(user, module))) {
             case ALL -> null;
             case SELF -> user.getEmployeeId() == null ? Set.of() : Set.of(user.getEmployeeId());
             case PROJECT -> projectVisibleEmployeeIds(user.getEmployeeId());
             case DEPARTMENT -> departmentVisibleEmployeeIds(user.getEmployeeId());
         };
+    }
+
+    /**
+     * 取指定模块生效的数据范围：sys_role_module_scope 有配置就用配置，否则沿用角色默认的 data_scope。
+     */
+    public String effectiveScope(LoginUser user, DataModule module) {
+        if (user == null) {
+            return DataScopeType.SELF.name();
+        }
+        if (module != null && user.getModuleScopes() != null) {
+            String override = user.getModuleScopes().get(module.name());
+            if (override != null && !override.isBlank()) {
+                return override;
+            }
+        }
+        return user.getDataScope();
     }
 
     /**
@@ -121,7 +145,12 @@ public class DataScopeService {
 
     /** 校验目标员工是否在当前用户数据范围内 */
     public boolean canAccessEmployee(LoginUser user, Long employeeId) {
-        Set<Long> visible = visibleEmployeeIds(user);
+        return canAccessEmployee(user, employeeId, null);
+    }
+
+    /** 校验目标员工是否在指定模块的数据范围内 */
+    public boolean canAccessEmployee(LoginUser user, Long employeeId, DataModule module) {
+        Set<Long> visible = visibleEmployeeIds(user, module);
         return visible == null || visible.contains(employeeId);
     }
 
@@ -131,10 +160,15 @@ public class DataScopeService {
      * PROJECT 仅本人负责或本人在组的项目组；SELF 仅本人在组的项目组。
      */
     public boolean canAccessProject(LoginUser user, ProjectTeam team) {
-        if (team == null) {
+        return canAccessProject(user, team, null);
+    }
+
+    /** 按指定模块的数据范围校验项目组可见性 */
+    public boolean canAccessProject(LoginUser user, ProjectTeam team, DataModule module) {
+        if (team == null || user == null) {
             return false;
         }
-        return switch (parseScope(user.getDataScope())) {
+        return switch (parseScope(effectiveScope(user, module))) {
             case ALL, DEPARTMENT -> true;
             case PROJECT -> isProjectManager(user, team) || isActiveMember(user.getEmployeeId(), team.getId());
             case SELF -> isActiveMember(user.getEmployeeId(), team.getId());

@@ -2,6 +2,7 @@ package com.example.company.user.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.company.audit.service.AuditService;
+import com.example.company.common.enums.DataModule;
 import com.example.company.common.enums.DataScopeType;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.LoginUser;
@@ -11,8 +12,10 @@ import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.role.entity.SysPermission;
 import com.example.company.role.entity.SysRole;
+import com.example.company.role.entity.SysRoleModuleScope;
 import com.example.company.role.mapper.SysPermissionMapper;
 import com.example.company.role.mapper.SysRoleMapper;
+import com.example.company.role.mapper.SysRoleModuleScopeMapper;
 import com.example.company.user.dto.LoginRequest;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
@@ -21,6 +24,7 @@ import com.example.company.user.service.UserService;
 import com.example.company.user.vo.CurrentUserVO;
 import com.example.company.user.vo.LoginResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,10 +32,14 @@ import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
@@ -40,6 +48,7 @@ public class UserServiceImpl implements UserService {
 
     private final SysUserMapper userMapper;
     private final SysRoleMapper roleMapper;
+    private final SysRoleModuleScopeMapper roleModuleScopeMapper;
     private final SysPermissionMapper permissionMapper;
     private final EmployeeMapper employeeMapper;
     private final PasswordEncoder passwordEncoder;
@@ -69,6 +78,7 @@ public class UserServiceImpl implements UserService {
                 .map(SysRole::getDataScope)
                 .max(Comparator.comparingInt(this::scopeRank))
                 .orElse(DataScopeType.SELF.name()));
+        loginUser.setModuleScopes(moduleScopesOf(roles));
 
         List<SysPermission> permissions = permissionMapper.selectByUserId(user.getId());
         loginUser.setPermissions(permissions.stream()
@@ -87,14 +97,52 @@ public class UserServiceImpl implements UserService {
         return loginUser;
     }
 
+    /**
+     * 合并多角色的模块级数据范围：同一模块取范围最大者，未配置的模块不出现在结果里（沿用角色级默认值）。
+     * 模块编码或取值非法的脏数据直接忽略并留日志，不能让登录 500。
+     */
+    private Map<String, String> moduleScopesOf(List<SysRole> roles) {
+        if (roles.isEmpty()) {
+            return new HashMap<>();
+        }
+        List<Long> roleIds = roles.stream().map(SysRole::getId).toList();
+        List<SysRoleModuleScope> overrides = roleModuleScopeMapper.selectList(
+                new QueryWrapper<SysRoleModuleScope>().in("role_id", roleIds));
+        Map<String, String> merged = new HashMap<>();
+        if (overrides == null) {
+            return merged;
+        }
+        for (SysRoleModuleScope override : overrides) {
+            if (override.getModuleCode() == null || override.getScopeType() == null) {
+                continue;
+            }
+            String module = override.getModuleCode().trim().toUpperCase(Locale.ROOT);
+            try {
+                DataModule.valueOf(module);
+            } catch (IllegalArgumentException e) {
+                log.warn("角色模块级数据范围包含未知模块，已忽略: {}", override.getModuleCode());
+                continue;
+            }
+            merged.merge(module, override.getScopeType().trim().toUpperCase(Locale.ROOT),
+                    (a, b) -> scopeRank(a) >= scopeRank(b) ? a : b);
+        }
+        return merged;
+    }
+
+    /** 数据范围强弱排序；非法取值按最弱的 SELF 处理 */
     private int scopeRank(String scope) {
         if (scope == null) return 0;
-        return switch (DataScopeType.valueOf(scope)) {
-            case SELF -> 0;
-            case PROJECT -> 1;
-            case DEPARTMENT -> 2;
-            case ALL -> 3;
-        };
+        try {
+            return switch (DataScopeType.valueOf(scope.trim().toUpperCase(Locale.ROOT))) {
+                case SELF -> 0;
+                case PROJECT -> 1;
+                case DEPARTMENT -> 2;
+                case ALL -> 3;
+            };
+        } catch (IllegalArgumentException e) {
+            log.warn("角色数据范围取值非法，按 SELF 参与比较: {}", scope);
+            return 0;
+        }
     }
 
     @Override

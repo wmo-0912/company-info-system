@@ -2,6 +2,7 @@ package com.example.company.department.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
@@ -130,7 +131,7 @@ public class DepartmentServiceImpl implements DepartmentService {
     public PageResponse<EmployeeListItemVO> employees(Long id, int page, int pageSize, String status) {
         requireDepartment(id);
         // 部门维度列表同样受数据权限约束，否则可绕过员工列表按部门 ID 直查全员
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(SecurityUtils.getCurrentUser());
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(SecurityUtils.getCurrentUser(), DataModule.EMPLOYEE);
         if (visible != null && visible.isEmpty()) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }

@@ -29,6 +29,11 @@ export function saveRolePermissions(id: number, permissionIds: number[]) {
   return apiPut<void>(`/roles/${id}/permissions`, { permissionIds })
 }
 
+/** 保存角色的模块级数据范围；传空对象表示全部模块沿用角色默认数据范围 */
+export function saveRoleModuleScopes(id: number, moduleScopes: Record<string, string>) {
+  return apiPut<RoleVO>(`/roles/${id}/module-scopes`, { moduleScopes })
+}
+
 export function fetchPermissionTree() {
   return apiGet<PermissionTreeNode[]>('/permissions/tree')
 }

@@ -3,6 +3,7 @@ package com.example.company.employment.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
@@ -59,7 +60,7 @@ public class EmploymentServiceImpl implements EmploymentService {
     @Override
     public PageResponse<ChangeRequestVO> page(int page, int pageSize, String status, String changeType, Long employeeId) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.EMPLOYMENT);
         if (visible != null && visible.isEmpty()) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }
@@ -418,7 +419,7 @@ public class EmploymentServiceImpl implements EmploymentService {
     }
 
     private void assertEmployeeVisible(Long employeeId) {
-        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), employeeId)) {
+        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), employeeId, DataModule.EMPLOYMENT)) {
             throw BusinessException.forbidden("无权访问该员工相关数据");
         }
     }

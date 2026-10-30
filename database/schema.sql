@@ -66,6 +66,15 @@ CREATE TABLE sys_role_permission (
     PRIMARY KEY (role_id, permission_id)
 );
 
+-- 角色在单个模块上的数据范围覆盖（未配置的模块沿用 sys_role.data_scope）
+CREATE TABLE sys_role_module_scope (
+    role_id     BIGINT      NOT NULL REFERENCES sys_role (id) ON DELETE CASCADE,
+    module_code VARCHAR(32) NOT NULL, -- DataModule 枚举：EMPLOYEE/DEPARTMENT/PROJECT/PERFORMANCE/EMPLOYMENT
+    scope_type  VARCHAR(20) NOT NULL, -- ALL/DEPARTMENT/PROJECT/SELF
+    PRIMARY KEY (role_id, module_code)
+);
+
+
 CREATE TABLE sys_config (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     config_key   VARCHAR(100) NOT NULL UNIQUE,

@@ -76,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（154 个单元/切片测试，不依赖数据库）
+# 后端测试（167 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -148,6 +148,8 @@ cd frontend; npm run type-check; npm run build
 22. **密码历史**：`sys_password_history` 只存 BCrypt 哈希，改密/重置/新建用户时各写入一条，事务内裁剪到最近 5 条。改密与"管理员显式指定新密码"都会先比对最近 5 个历史密码，命中则 400（`新密码不能与最近 5 次使用过的密码相同`）；系统生成的随机密码不比对但仍记入历史。存量用户的历史无法回溯，从下一次改密起生效。迁移脚本：`database/migrations/2026-10-30-password-history.sql`。
 
 23. **绩效周期锁定**：`performance_period` 只登记被显式锁定/解锁过的周期，未登记的周期一律视为未锁定。锁定后该周期内不能再新增、修改、提交评价（`PerformanceServiceImpl.assertPeriodOpen` 在 create/update/submit 前校验，改周期时旧周期与新周期都要检查），解锁保留登记行以便追溯锁定时间。接口 `PATCH /api/v1/performance-periods/{periodKey}/lock`（权限点 `performance:review`），前端绩效页工具栏可锁定/解锁当前筛选的周期并展示已锁定周期。迁移脚本：`database/migrations/2026-10-30-performance-period-lock.sql`。
+
+24. **模块级数据范围**：角色除了默认 `data_scope`，还能按模块单独覆盖（`sys_role_module_scope`，模块见后端 `DataModule`：员工档案/组织架构/项目组/绩效考核/入转调离）。登录装配权限时把多角色的模块配置合并、同一模块取范围最大者，未配置的模块沿用角色默认值；`DataScopeService` 提供 `effectiveScope/visibleEmployeeIds(user, module)/canAccessProject(user, team, module)`，各业务服务都带上自己的模块。典型用法是"人事默认看全公司档案、绩效只能看本部门"。角色管理新增 `PUT /api/v1/roles/{id}/module-scopes`（`role:manage`），未知模块或非法取值直接 400，ADMIN 角色的模块配置必须全为 `ALL`（否则管理员会把自己锁在外面）；前端角色编辑弹窗里每个模块一个下拉，留空表示沿用默认。迁移脚本：`database/migrations/2026-10-30-role-module-scope.sql`。
 
 ## 常见问题
 

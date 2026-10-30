@@ -2,6 +2,7 @@ package com.example.company.employee.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
@@ -45,7 +46,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public PageResponse<EmployeeListItemVO> page(int page, int pageSize, String keyword, Long departmentId, String status) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.EMPLOYEE);
         if (visible != null && visible.isEmpty()) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }
@@ -85,7 +86,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     public EmployeeDetailVO detail(Long id) {
         Employee employee = requireEmployee(id);
         LoginUser current = SecurityUtils.getCurrentUser();
-        if (!dataScopeService.canAccessEmployee(current, id)) {
+        if (!dataScopeService.canAccessEmployee(current, id, DataModule.EMPLOYEE)) {
             throw BusinessException.forbidden("无权查看该员工档案");
         }
         return toDetailVO(employee, canViewSensitive(current, id));
@@ -195,7 +196,8 @@ public class EmployeeServiceImpl implements EmployeeService {
         if (employeeId.equals(current.getEmployeeId())) {
             return true;
         }
-        return "ALL".equals(current.getDataScope()) || "DEPARTMENT".equals(current.getDataScope());
+        String scope = dataScopeService.effectiveScope(current, DataModule.EMPLOYEE);
+        return "ALL".equals(scope) || "DEPARTMENT".equals(scope);
     }
 
     private void apply(Employee employee, EmployeeCreateRequest request) {

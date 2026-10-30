@@ -1,6 +1,7 @@
 package com.example.company.common.security;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.company.common.enums.DataModule;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
 import com.example.company.employee.mapper.EmployeeMapper;
@@ -14,7 +15,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -167,5 +170,50 @@ class DataScopeServiceTest {
         d.setId(id);
         d.setParentId(parentId);
         return d;
+    }
+
+    @Test
+    void moduleOverrideWinsOverRoleDefault() {
+        LoginUser hr = user("ALL", 5L);
+        hr.setModuleScopes(Map.of("PERFORMANCE", "SELF"));
+
+        assertNull(dataScopeService.visibleEmployeeIds(hr, DataModule.EMPLOYEE), "未配置的模块沿用 ALL");
+        assertEquals(Set.of(5L), dataScopeService.visibleEmployeeIds(hr, DataModule.PERFORMANCE));
+        assertEquals("SELF", dataScopeService.effectiveScope(hr, DataModule.PERFORMANCE));
+    }
+
+    @Test
+    void moduleWithoutOverrideFallsBackToRoleScope() {
+        LoginUser pm = user("PROJECT", 7L);
+        pm.setModuleScopes(new HashMap<>());
+
+        assertEquals("PROJECT", dataScopeService.effectiveScope(pm, DataModule.PROJECT));
+        assertEquals("PROJECT", dataScopeService.effectiveScope(pm, null));
+    }
+
+    @Test
+    void moduleScopeDrivesProjectAccess() {
+        LoginUser hr = user("ALL", 5L);
+        ProjectTeam team = projectTeam(7L);
+        when(projectTeamMemberMapper.selectCount(any())).thenReturn(0L);
+        hr.setModuleScopes(Map.of("PROJECT", "SELF"));
+
+        assertTrue(dataScopeService.canAccessProject(hr, team), "未配置时 ALL 可见所有项目组");
+        assertFalse(dataScopeService.canAccessProject(hr, team, DataModule.PROJECT),
+                "模块级配置为 SELF 后只能看本人在组项目");
+    }
+
+    @Test
+    void illegalModuleScopeFallsBackToSelf() {
+        LoginUser user = user("ALL", 5L);
+        user.setModuleScopes(Map.of("EMPLOYEE", "TEAM"));
+
+        assertEquals(Set.of(5L), dataScopeService.visibleEmployeeIds(user, DataModule.EMPLOYEE));
+    }
+
+    @Test
+    void nullUserTreatedAsSelfScope() {
+        assertEquals("SELF", dataScopeService.effectiveScope(null, DataModule.EMPLOYEE));
+        assertFalse(dataScopeService.canAccessProject(null, projectTeam(7L), DataModule.PROJECT));
     }
 }

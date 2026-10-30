@@ -90,7 +90,7 @@ class EmployeeSecurityWebTest {
         when(claims.getSubject()).thenReturn("2");
         when(tokenProvider.parse(token)).thenReturn(claims);
         when(userService.loadLoginUser(2L)).thenReturn(user);
-        when(dataScopeService.canAccessEmployee(user, 99L)).thenReturn(false);
+        when(dataScopeService.canAccessEmployee(user, 99L, com.example.company.common.enums.DataModule.EMPLOYEE)).thenReturn(false);
         when(employeeService.detail(anyLong()))
                 .thenThrow(com.example.company.common.exception.BusinessException.forbidden("无权查看该员工档案"));
 

@@ -56,6 +56,8 @@ export interface RoleVO {
   dataScope: string
   enabled: boolean
   permissionIds: number[]
+  /** 模块级数据范围覆盖：moduleCode -> scope，缺省表示沿用 dataScope */
+  moduleScopes: Record<string, string>
 }
 
 export interface PermissionTreeNode {

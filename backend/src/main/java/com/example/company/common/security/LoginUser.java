@@ -2,7 +2,9 @@ package com.example.company.common.security;
 
 import lombok.Data;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -28,6 +30,9 @@ public class LoginUser {
 
     /** 最强数据范围（多角色取并集时取范围最大者） */
     private String dataScope;
+
+    /** 模块级数据范围覆盖：moduleCode -> scope；缺省时沿用 dataScope */
+    private Map<String, String> moduleScopes = new HashMap<>();
 
     /** 会话版本：与 token 中的 ver 声明比对，不一致即视为已失效 */
     private Integer tokenVersion;

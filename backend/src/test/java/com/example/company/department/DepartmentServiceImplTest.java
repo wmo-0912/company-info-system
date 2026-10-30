@@ -123,7 +123,7 @@ class DepartmentServiceImplTest {
     @Test
     void departmentEmployeesReturnEmptyWhenNoVisibleEmployee() {
         when(departmentMapper.selectById(1L)).thenReturn(dept(1L, null));
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of());
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of());
 
         PageResponse<EmployeeListItemVO> page = service.employees(1L, 1, 10, null);
         assertEquals(0, page.getTotal());
@@ -135,7 +135,7 @@ class DepartmentServiceImplTest {
     @SuppressWarnings("unchecked")
     void departmentEmployeesFilteredByVisibleEmployeeIds() {
         when(departmentMapper.selectById(1L)).thenReturn(dept(1L, null));
-        when(dataScopeService.visibleEmployeeIds(any())).thenReturn(Set.of(9L, 10L));
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(9L, 10L));
         Page<Employee> dbPage = new Page<>(1, 10);
         dbPage.setRecords(List.of());
         dbPage.setTotal(0);
