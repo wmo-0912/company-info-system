@@ -35,6 +35,9 @@ build/
 application-local.yml
 
 node_modules/
+dist/
 
 # 本地工具配置
 .trae/
+/frontend/dist
+/frontend/dist/assets
