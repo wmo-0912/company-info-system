@@ -242,3 +242,13 @@ export interface DashboardSummary {
   myTeamCount: number
   myDraftReviewCount: number
 }
+
+/** 侧边栏菜单节点（由 /menus 按当前用户权限下发） */
+export interface MenuNode {
+  id: number
+  code: string
+  title: string
+  path: string | null
+  icon: string | null
+  children: MenuNode[]
+}
