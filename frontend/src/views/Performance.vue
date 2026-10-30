@@ -41,12 +41,14 @@
           </template>
         </el-table-column>
         <el-table-column prop="comment" label="评语" show-overflow-tooltip />
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.status === 'DRAFT' && auth.has('performance:update')" link type="primary"
               @click="openDialog(row)">编辑</el-button>
             <el-button v-if="row.status === 'DRAFT' && auth.has('performance:submit')" link type="success"
               @click="onSubmitReview(row)">提交</el-button>
+            <el-button v-if="row.status === 'SUBMITTED' && auth.has('performance:review')" link type="warning"
+              @click="onReturnReview(row)">退回</el-button>
           </template>
         </el-table-column>
         <template #empty>
@@ -130,6 +132,7 @@ import {
   createReview,
   fetchMyReviews,
   pageReviews,
+  returnReview,
   submitReview,
   updateReview
 } from '@/api/performance'
@@ -275,6 +278,19 @@ async function onSave() {
   } finally {
     saving.value = false
   }
+}
+
+async function onReturnReview(row: PerformanceReviewVO) {
+  const { value } = await ElMessageBox.prompt('请填写退回原因（会记入审计日志）', '退回评价', {
+    type: 'warning',
+    inputType: 'textarea',
+    inputPlaceholder: '如：评分与考勤记录不符',
+    inputValidator: (val) => (val && val.trim().length > 0) || '请填写退回原因',
+    inputValue: ''
+  })
+  await returnReview(row.id, value.trim())
+  ElMessage.success('已退回，评价人可修改后重新提交')
+  load()
 }
 
 async function onSubmitReview(row: PerformanceReviewVO) {

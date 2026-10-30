@@ -7,6 +7,7 @@ import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.PeriodType;
 import com.example.company.common.enums.ReviewStatus;
 import com.example.company.common.exception.BusinessException;
+import com.example.company.common.security.DataScopeService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.employee.entity.Employee;
@@ -21,12 +22,14 @@ import com.example.company.project.entity.ProjectTeamMember;
 import com.example.company.project.mapper.ProjectTeamMapper;
 import com.example.company.project.mapper.ProjectTeamMemberMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -37,13 +40,13 @@ public class PerformanceServiceImpl implements PerformanceService {
     private final ProjectTeamMapper teamMapper;
     private final ProjectTeamMemberMapper memberMapper;
     private final AuditService auditService;
+    private final DataScopeService dataScopeService;
 
     @Override
     public PageResponse<PerformanceReviewVO> page(int page, int pageSize, String periodType, String periodKey, String status) {
         LoginUser current = SecurityUtils.getCurrentUser();
         QueryWrapper<PerformanceReview> qw = new QueryWrapper<>();
-        applyScope(qw, current);
-        if (qw == null) {
+        if (!applyScope(qw, current)) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }
         if (StringUtils.hasText(periodType)) {
@@ -60,43 +63,46 @@ public class PerformanceServiceImpl implements PerformanceService {
         return PageResponse.from(result, this::toVO);
     }
 
-    /** 返回 null（通过包装空查询语义）表示无可见数据 */
-    private void applyScope(QueryWrapper<PerformanceReview> qw, LoginUser current) {
-        String scope = current.getDataScope();
-        if ("ALL".equals(scope) || "DEPARTMENT".equals(scope)) {
-            return; // 管理员/人事可看全部
+    /**
+     * 按统一数据范围过滤：能看“我评价的记录”与“数据范围内的人被评价的非草稿记录”。
+     *
+     * @return false 表示当前用户没有任何可见员工，直接返回空页
+     */
+    private boolean applyScope(QueryWrapper<PerformanceReview> qw, LoginUser current) {
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        if (visible == null) {
+            return true; // ALL：全部可见
         }
-        if (current.getEmployeeId() == null) {
-            qw.eq("id", -1L);
-            return;
+        if (visible.isEmpty()) {
+            return false;
         }
-        if ("PROJECT".equals(scope)) {
-            // 项目经理：自己作为评价人的记录 + 自己作为被评价人的记录
-            qw.and(w -> w.eq("reviewer_employee_id", current.getEmployeeId())
-                    .or().eq("employee_id", current.getEmployeeId()));
-        } else {
-            // SELF：仅本人被评价且已提交/退回的记录
-            qw.eq("employee_id", current.getEmployeeId())
-                    .in("status", ReviewStatus.SUBMITTED.name(), ReviewStatus.RETURNED.name());
+        Long me = current.getEmployeeId();
+        String draft = ReviewStatus.DRAFT.name();
+        if (me == null) {
+            qw.in("employee_id", visible).ne("status", draft);
+            return true;
         }
+        qw.and(w -> w.eq("reviewer_employee_id", me)
+                .or(x -> x.in("employee_id", visible).ne("status", draft)));
+        return true;
     }
 
     @Override
     public PerformanceReviewVO detail(Long id) {
         PerformanceReview review = requireReview(id);
         LoginUser current = SecurityUtils.getCurrentUser();
-        if ("ALL".equals(current.getDataScope()) || "DEPARTMENT".equals(current.getDataScope())) {
-            return toVO(review);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        if (visible == null) {
+            return toVO(review); // 全公司范围（管理员/人事）
         }
-        boolean involved = review.getEmployeeId().equals(current.getEmployeeId())
-                || review.getReviewerEmployeeId().equals(current.getEmployeeId());
-        if (!involved) {
+        Long me = current.getEmployeeId();
+        boolean isReviewer = me != null && me.equals(review.getReviewerEmployeeId());
+        boolean inScope = visible.contains(review.getEmployeeId());
+        if (!isReviewer && !inScope) {
             throw BusinessException.forbidden("无权查看该绩效记录");
         }
-        // 普通员工仅能看到已提交的评价
-        if (review.getEmployeeId().equals(current.getEmployeeId())
-                && ReviewStatus.DRAFT.name().equals(review.getStatus())
-                && !review.getReviewerEmployeeId().equals(current.getEmployeeId())) {
+        // 被评价人本人看不到还在草稿阶段的评价
+        if (!isReviewer && ReviewStatus.DRAFT.name().equals(review.getStatus())) {
             throw BusinessException.forbidden("草稿状态的评价对被评价人不可见");
         }
         return toVO(review);
@@ -132,7 +138,12 @@ public class PerformanceServiceImpl implements PerformanceService {
         review.setRating(request.getRating());
         review.setComment(request.getComment());
         review.setStatus(ReviewStatus.DRAFT.name());
-        reviewMapper.insert(review);
+        try {
+            reviewMapper.insert(review);
+        } catch (DuplicateKeyException e) {
+            // 并发提交时唯一约束兜底，避免直接冒 500
+            throw BusinessException.conflict("该员工此周期已存在您的评价记录");
+        }
         auditService.success("performance:create", "performance_review", review.getId(),
                 "创建绩效评价 周期=" + request.getPeriodKey());
         return toVO(review);
@@ -157,7 +168,13 @@ public class PerformanceServiceImpl implements PerformanceService {
         if (ReviewStatus.RETURNED.name().equals(review.getStatus())) {
             review.setStatus(ReviewStatus.DRAFT.name());
         }
-        reviewMapper.updateById(review);
+        try {
+            reviewMapper.updateById(review);
+        } catch (DuplicateKeyException e) {
+            throw BusinessException.conflict("该员工此周期已存在您的评价记录");
+        }
+        auditService.success("performance:update", "performance_review", id,
+                "更新绩效评价 周期=" + review.getPeriodKey() + " 状态=" + review.getStatus());
         return toVO(review);
     }
 
@@ -176,6 +193,25 @@ public class PerformanceServiceImpl implements PerformanceService {
         review.setSubmittedAt(OffsetDateTime.now());
         reviewMapper.updateById(review);
         auditService.success("performance:submit", "performance_review", id, "提交绩效评价");
+        return toVO(review);
+    }
+
+    @Override
+    @Transactional
+    public PerformanceReviewVO returnForRevision(Long id, String reason) {
+        PerformanceReview review = requireReview(id);
+        LoginUser current = SecurityUtils.getCurrentUser();
+        if (review.getReviewerEmployeeId().equals(current.getEmployeeId())) {
+            throw BusinessException.badRequest("不能退回自己提交的评价");
+        }
+        if (!ReviewStatus.SUBMITTED.name().equals(review.getStatus())) {
+            throw BusinessException.unprocessable("仅已提交的评价可以退回");
+        }
+        review.setStatus(ReviewStatus.RETURNED.name());
+        reviewMapper.updateById(review);
+        auditService.success("performance:return", "performance_review", id,
+                "退回绩效评价：" + (StringUtils.hasText(reason) ? reason : "未填写原因")
+                        + "（周期 " + review.getPeriodKey() + "）");
         return toVO(review);
     }
 

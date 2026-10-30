@@ -16,5 +16,8 @@ public interface PerformanceService {
 
     PerformanceReviewVO submit(Long id);
 
+    /** 人事复核退回：仅已提交的评价可退回，退回后由评价人改稿并重新提交 */
+    PerformanceReviewVO returnForRevision(Long id, String reason);
+
     PageResponse<PerformanceReviewVO> my(int page, int pageSize);
 }

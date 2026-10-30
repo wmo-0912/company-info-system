@@ -42,3 +42,8 @@ export function updateReview(id: number, body: ReviewBody) {
 export function submitReview(id: number) {
   return apiPost<PerformanceReviewVO>(`/performance-reviews/${id}/submit`)
 }
+
+/** 人事复核退回，原因只进审计日志 */
+export function returnReview(id: number, reason?: string) {
+  return apiPost<PerformanceReviewVO>(`/performance-reviews/${id}/return`, { reason: reason || null })
+}

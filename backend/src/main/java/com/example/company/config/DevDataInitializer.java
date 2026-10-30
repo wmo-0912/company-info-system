@@ -235,6 +235,7 @@ public class DevDataInitializer implements CommandLineRunner {
                 new Perm("performance:create", "绩效创建", "BUTTON", "performance:read", null, null, 61),
                 new Perm("performance:update", "绩效编辑", "BUTTON", "performance:read", null, null, 62),
                 new Perm("performance:submit", "绩效提交", "BUTTON", "performance:read", null, null, 63),
+                new Perm("performance:review", "绩效复核", "BUTTON", "performance:read", null, null, 64),
                 new Perm("user:read", "用户查看", "MENU", "system", "/system/users", null, 71),
                 new Perm("user:create", "用户新增", "BUTTON", "user:read", null, null, 72),
                 new Perm("user:update", "用户编辑", "BUTTON", "user:read", null, null, 73),
@@ -300,6 +301,7 @@ public class DevDataInitializer implements CommandLineRunner {
                 "user:read", "user:create", "user:update", "user:disable",
                 "role:read", "role:manage", "permission:manage",
                 "dictionary:read", "dictionary:manage",
+                "performance:read", "performance:review",
                 "system:config:read", "system:config:update",
                 "audit:read",
                 "profile:read", "profile:update"), permIds);
@@ -310,6 +312,7 @@ public class DevDataInitializer implements CommandLineRunner {
                 "department:read",
                 "employee:read", "employee:create", "employee:update", "employee:archive",
                 "employment:submit", "employment:process",
+                "performance:read", "performance:review",
                 "dictionary:read",
                 "profile:read", "profile:update"), permIds);
 
