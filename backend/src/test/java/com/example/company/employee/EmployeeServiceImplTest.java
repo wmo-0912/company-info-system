@@ -1,6 +1,7 @@
 package com.example.company.employee;
 
 import com.example.company.audit.service.AuditService;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
@@ -44,6 +45,8 @@ class EmployeeServiceImplTest {
     private DataScopeService dataScopeService;
     @Mock
     private AuditService auditService;
+    @Mock
+    private DictionaryService dictionaryService;
 
     @InjectMocks
     private EmployeeServiceImpl service;

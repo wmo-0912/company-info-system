@@ -8,6 +8,7 @@ import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
@@ -39,6 +40,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     private final DepartmentMapper departmentMapper;
     private final DataScopeService dataScopeService;
     private final AuditService auditService;
+    private final DictionaryService dictionaryService;
 
     @Override
     public PageResponse<EmployeeListItemVO> page(int page, int pageSize, String keyword, Long departmentId, String status) {
@@ -137,6 +139,7 @@ public class EmployeeServiceImpl implements EmployeeService {
             employee.setPositionName(request.getPositionName());
         }
         employee.setPositionLevelCode(request.getPositionLevelCode());
+        assertDictionaries(request.getEducationCode(), request.getPositionLevelCode(), request.getGender());
         assertManagerValid(request.getManagerEmployeeId(), id);
         employee.setManagerEmployeeId(request.getManagerEmployeeId());
         employee.setHireDate(request.getHireDate());
@@ -172,6 +175,13 @@ public class EmployeeServiceImpl implements EmployeeService {
         return null;
     }
 
+    /** 学历/职级/性别必须取自启用状态的字典项，避免写入 BACHELOR_X 这类脏值 */
+    private void assertDictionaries(String educationCode, String positionLevelCode, String gender) {
+        dictionaryService.validateDictionaryItem("EDUCATION", educationCode, "学历");
+        dictionaryService.validateDictionaryItem("POSITION_LEVEL", positionLevelCode, "职位层级");
+        dictionaryService.validateDictionaryItem("GENDER", gender, "性别");
+    }
+
     public Employee requireEmployee(Long id) {
         Employee employee = employeeMapper.selectById(id);
         if (employee == null) {
@@ -203,6 +213,7 @@ public class EmployeeServiceImpl implements EmployeeService {
         employee.setDepartmentId(request.getDepartmentId());
         employee.setPositionName(request.getPositionName());
         employee.setPositionLevelCode(request.getPositionLevelCode());
+        assertDictionaries(request.getEducationCode(), request.getPositionLevelCode(), request.getGender());
         assertManagerValid(request.getManagerEmployeeId(), null);
         employee.setManagerEmployeeId(request.getManagerEmployeeId());
         employee.setHireDate(request.getHireDate());

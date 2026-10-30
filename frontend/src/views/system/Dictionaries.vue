@@ -12,11 +12,25 @@
             </div>
           </template>
           <el-table v-loading="typeLoading" :data="types" highlight-current-row @current-change="onTypeSelect">
-            <el-table-column prop="dictCode" label="编码" width="130" />
+            <el-table-column prop="dictCode" label="编码" width="120" />
             <el-table-column prop="dictName" label="名称" />
             <el-table-column label="状态" width="80">
               <template #default="{ row }">
                 <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="auth.has('dictionary:manage')" label="操作" width="140" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click.stop="openTypeDialog(row)">编辑</el-button>
+                <el-dropdown trigger="click" @command="(cmd: string) => onTypeCommand(cmd, row)">
+                  <el-button link type="primary" @click.stop>更多</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="toggle">{{ row.enabled ? '停用' : '启用' }}</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </template>
             </el-table-column>
             <template #empty>
@@ -49,6 +63,7 @@
                 <el-button link :type="row.enabled ? 'danger' : 'success'" @click="onToggleItem(row)">
                   {{ row.enabled ? '停用' : '启用' }}
                 </el-button>
+                <el-button link type="danger" @click="onDeleteItem(row)">删除</el-button>
               </template>
             </el-table-column>
             <template #empty>
@@ -59,10 +74,11 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="typeVisible" title="新建字典类型" width="420px" destroy-on-close>
+    <el-dialog v-model="typeVisible" :title="editingType ? '编辑字典类型' : '新建字典类型'" width="420px" destroy-on-close>
       <el-form ref="typeFormRef" :model="typeForm" :rules="typeRules" label-width="90px">
         <el-form-item label="字典编码" prop="dictCode">
-          <el-input v-model="typeForm.dictCode" />
+          <el-input v-model="typeForm.dictCode" :disabled="!!editingType" />
+          <div v-if="editingType" class="form-hint">编码被业务字段引用，创建后不可修改</div>
         </el-form-item>
         <el-form-item label="字典名称" prop="dictName">
           <el-input v-model="typeForm.dictName" />
@@ -99,11 +115,15 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   changeDictItemStatus,
+  changeDictTypeStatus,
   createDictItem,
   createDictType,
+  deleteDictItem,
+  deleteDictType,
   listDictItems,
   listDictTypes,
-  updateDictItem
+  updateDictItem,
+  updateDictType
 } from '@/api/dictionary'
 import type { DictionaryItem, DictionaryType } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
@@ -117,6 +137,7 @@ const items = ref<DictionaryItem[]>([])
 const itemLoading = ref(false)
 
 const typeVisible = ref(false)
+const editingType = ref<DictionaryType | null>(null)
 const itemVisible = ref(false)
 const editingItem = ref<DictionaryItem | null>(null)
 const saving = ref(false)
@@ -159,17 +180,57 @@ function onTypeSelect(row: DictionaryType | null) {
   if (row) loadItems()
 }
 
-function openTypeDialog() {
-  Object.assign(typeForm, { dictCode: '', dictName: '' })
+function openTypeDialog(row?: DictionaryType) {
+  editingType.value = row || null
+  Object.assign(typeForm, { dictCode: row?.dictCode || '', dictName: row?.dictName || '' })
   typeVisible.value = true
+}
+
+async function onTypeCommand(command: string, row: DictionaryType) {
+  if (command === 'toggle') {
+    await ElMessageBox.confirm(`确定${row.enabled ? '停用' : '启用'}字典「${row.dictName}」吗？`, '提示', {
+      type: 'warning'
+    })
+    await changeDictTypeStatus(row.id, !row.enabled)
+    ElMessage.success('操作成功')
+    loadTypes()
+    return
+  }
+  await ElMessageBox.confirm(
+    `确定删除字典「${row.dictName}」吗？删除后不可恢复，仍有字典项时会被拒绝。`,
+    '删除确认',
+    { type: 'warning' }
+  )
+  await deleteDictType(row.id)
+  ElMessage.success('字典已删除')
+  if (currentType.value?.id === row.id) {
+    currentType.value = null
+    items.value = []
+  }
+  loadTypes()
+}
+
+async function onDeleteItem(row: DictionaryItem) {
+  await ElMessageBox.confirm(`确定删除字典项「${row.itemLabel}」吗？已被员工档案使用时会被拒绝。`, '删除确认', {
+    type: 'warning'
+  })
+  await deleteDictItem(row.id)
+  ElMessage.success('字典项已删除')
+  loadItems()
 }
 
 async function onSaveType() {
   await typeFormRef.value?.validate()
   saving.value = true
   try {
-    await createDictType({ dictCode: typeForm.dictCode, dictName: typeForm.dictName })
-    ElMessage.success('字典类型已创建')
+    const body = { dictCode: typeForm.dictCode, dictName: typeForm.dictName }
+    if (editingType.value) {
+      await updateDictType(editingType.value.id, body)
+      ElMessage.success('字典类型已更新')
+    } else {
+      await createDictType(body)
+      ElMessage.success('字典类型已创建')
+    }
     typeVisible.value = false
     loadTypes()
   } finally {
@@ -219,6 +280,12 @@ onMounted(loadTypes)
 </script>
 
 <style scoped>
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
 .card-header {
   display: flex;
   align-items: center;
