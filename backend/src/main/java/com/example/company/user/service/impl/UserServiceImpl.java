@@ -115,7 +115,9 @@ public class UserServiceImpl implements UserService {
         if (!"ACTIVE".equals(user.getStatus())) {
             auditService.recordForActor(user.getId(), user.getUsername(), "auth:login", "user", user.getId(), false,
                     "登录被拒绝：账号状态为 " + user.getStatus());
-            throw BusinessException.unauthorized("账号已被停用或锁定，请联系管理员");
+            // 提示与"密码错误"保持一致：否则攻击者可以用正确密码探测账号是否存在/被锁，
+            // 真实原因（DISABLED/LOCKED）只写进审计日志，管理员可查。
+            throw BusinessException.unauthorized("用户名或密码错误");
         }
 
         userMapper.markLoginSuccess(user.getId());

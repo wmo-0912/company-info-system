@@ -113,7 +113,9 @@ class LoginLockoutTest {
         when(userMapper.selectOne(any())).thenReturn(user("LOCKED", 5));
         when(passwordEncoder.matches(eq("right"), anyString())).thenReturn(true);
 
-        assertThrows(BusinessException.class, () -> userService.login(request("right")));
+        BusinessException ex = assertThrows(BusinessException.class, () -> userService.login(request("right")));
+        // 不允许通过提示区分"密码错"和"账号被锁"，否则可用正确密码枚举账号状态
+        assertEquals("用户名或密码错误", ex.getMessage());
         verify(userMapper, never()).markLoginSuccess(anyLong());
         verify(auditService).recordForActor(eq(7L), eq("zhangsan"), eq("auth:login"), eq("user"),
                 eq(7L), eq(false), contains("账号状态为 LOCKED"));
