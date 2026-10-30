@@ -111,4 +111,17 @@ class MenuServiceTest {
 
         assertTrue(menuService.menusOf(user()).isEmpty());
     }
+
+    @Test
+    @DisplayName("个人中心不进侧边栏，入口固定在右上角用户菜单")
+    void personalCenterExcludedFromSidebar() {
+        SysPermission dashboard = perm(1L, "dashboard:view", "首页仪表盘", null, "/");
+        SysPermission profile = perm(2L, "profile:read", "个人中心", null, "/profile");
+        when(permissionMapper.selectList(any())).thenReturn(List.of(dashboard, profile));
+
+        List<MenuVO> menus = menuService.menusOf(user("dashboard:view", "profile:read"));
+
+        assertEquals(1, menus.size());
+        assertEquals("dashboard:view", menus.get(0).code());
+    }
 }

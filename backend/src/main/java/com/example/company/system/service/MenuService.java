@@ -27,6 +27,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class MenuService {
 
+    /** 个人中心入口固定在右上角用户菜单，不进侧边栏，避免同一个入口出现两次 */
+    private static final Set<String> SIDEBAR_EXCLUDED = Set.of("profile:read");
+
     private final SysPermissionMapper permissionMapper;
 
     public List<MenuVO> menusOf(LoginUser user) {
@@ -41,13 +44,20 @@ public class MenuService {
         if (all == null || all.isEmpty()) {
             return List.of();
         }
-        Set<Long> ids = new LinkedHashSet<>();
+        List<SysPermission> nav = new ArrayList<>();
         for (SysPermission p : all) {
+            String code = p.getPermissionCode();
+            if (code == null || !SIDEBAR_EXCLUDED.contains(code)) {
+                nav.add(p);
+            }
+        }
+        Set<Long> ids = new LinkedHashSet<>();
+        for (SysPermission p : nav) {
             ids.add(p.getId());
         }
         Map<Long, List<SysPermission>> children = new LinkedHashMap<>();
         List<SysPermission> roots = new ArrayList<>();
-        for (SysPermission p : all) {
+        for (SysPermission p : nav) {
             Long parentId = p.getParentId();
             // parent 不在本批菜单里（已停用/已删除/历史脏数据）时按根节点处理，避免整枝菜单消失
             if (parentId == null || !ids.contains(parentId)) {

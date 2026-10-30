@@ -106,7 +106,11 @@ const activePath = computed(() => {
   return route.path
 })
 
+/** 个人中心入口固定在右上角用户菜单，不在侧边栏，标题从菜单里取不到，单独兜底 */
+const STATIC_TITLES: Record<string, string> = { '/profile': '个人中心' }
+
 const currentTitle = computed(() => {
+  if (STATIC_TITLES[route.path]) return STATIC_TITLES[route.path]
   for (const m of menus.value) {
     if (m.path && m.path === route.path) return m.title
     const child = m.children.find((c) => !!c.path && route.path.startsWith(c.path))
