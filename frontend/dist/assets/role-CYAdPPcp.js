@@ -1,1 +1,0 @@
-import{N as r,L as t,M as o}from"./index-DVgGDkAj.js";function i(){return o("/roles")}function a(e){return t("/roles",e)}function u(e,s){return r(`/roles/${e}`,s)}function l(e,s){return r(`/roles/${e}/permissions`,{permissionIds:s})}function c(){return o("/permissions/tree")}export{a as c,c as f,i as l,l as s,u};

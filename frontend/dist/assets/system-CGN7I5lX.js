@@ -1,1 +1,0 @@
-import{N as n,M as s}from"./index-DVgGDkAj.js";function i(){return s("/dashboard/summary")}function u(){return s("/system/config")}function f(t,r,a){return n("/system/config",{configKey:t,configValue:r,description:a})}export{i as f,u as l,f as u};
