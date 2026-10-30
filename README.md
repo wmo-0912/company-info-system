@@ -16,8 +16,7 @@
 ```
 ├─ backend/          # Spring Boot 后端（Maven Wrapper）
 ├─ frontend/         # Vue 3 前端
-├─ database/         # schema.sql 建表脚本
-└─ docs/             # 实施设计说明书、部署文档（含 Nginx 示例、测试账号、阿里云上线指南）
+└─ database/         # schema.sql 建表脚本，migrations/ 存量库升级脚本
 ```
 
 ## 环境要求
@@ -76,7 +75,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（203 个单元/切片测试，不依赖数据库）
+# 后端测试（204 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -87,7 +86,16 @@ cd frontend; npm run type-check; npm run build
 
 以下账号由 `local` profile 的开发数据初始化器创建，数据库只存 BCrypt 哈希。**禁止在生产使用，生产启动时不会自动创建任何账号。**
 
-完整清单（用户名、密码、角色、数据范围与管理建议）见 [docs/demo-accounts.md](docs/demo-accounts.md)。登录页不展示任何测试账号，避免向公网访客暴露默认口令。
+| 用户名 | 密码 | 角色 | 数据范围 |
+|---|---|---|---|
+| `admin` | `Admin@123` | 系统管理员（ADMIN） | 全部 |
+| `hr` | `Hr@123456` | 人事（HR） | 全部 |
+| `pm` | `Pm@123456` | 项目经理（PROJECT_MANAGER） | 负责的项目组 |
+| `zhangsan` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
+| `lisi` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
+| `wangwu` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
+
+登录页不展示任何测试账号，避免向公网访客暴露默认口令。
 
 新用户的初始密码由管理员创建用户时设置并**线下交付**（系统无邮件/短信服务，不会自动发送通知）。
 
@@ -135,7 +143,7 @@ cd frontend; npm run type-check; npm run build
 15. **申请号与并发**：入转调离申请号是 `CR` + 毫秒时间戳 + 6 位随机数，数据库仍有唯一约束兜底；`create()` 捕获 `DuplicateKeyException` 后重新取号重试（最多 3 次，仍失败返回 409）。该方法故意不加 `@Transactional`——PostgreSQL 里同一事务违反唯一约束后会进入 aborted 状态，同事务重试只会继续失败。
 16. **内置角色与角色启停**：ADMIN / HR / PROJECT_MANAGER / EMPLOYEE 四个内置角色的编码被初始化脚本与菜单逻辑依赖，接口拒绝改编码、拒绝停用；ADMIN 的数据范围固定为 `ALL`，且必须保留「角色管理」权限点，否则会出现无人能再维护权限的死锁。自定义角色可在角色管理中启用/停用，停用后其权限点不再生效，相关用户下一次请求即时失去权限。角色的 `data_scope` 若被写入非法枚举值（历史脏数据），按最小权限降级为 `SELF` 并记一条 WARN 日志，不会让接口 500。
 
-17. **菜单即权限点**：侧边栏不再在前端硬编码，改为调用 `GET /api/v1/menus` 下发菜单树，节点来自 `sys_permission` 中 `permission_type = MENU` 的行（`route_path` 为前端真实路由、`icon` 为 Element Plus 图标名、`sort_order` 控制排序、`enabled` 控制上下线）。用户被授予叶子节点即可，父级分组即使没单独授权也会自动带出；父节点被停用或删除时子节点按根节点处理，不会整枝消失。菜单只影响"看得见"，真正的访问控制仍由路由守卫与服务端 `@PreAuthorize` 判定。
+17. **菜单即权限点**：侧边栏不再在前端硬编码，改为调用 `GET /api/v1/menus` 下发菜单树，节点来自 `sys_permission` 中 `permission_type = MENU` 的行（`route_path` 为前端真实路由、`icon` 为 Element Plus 图标名、`sort_order` 控制排序、`enabled` 控制上下线）。用户被授予叶子节点即可，父级分组即使没单独授权也会自动带出；父节点被停用或删除时子节点按根节点处理，不会整枝消失。菜单只影响"看得见"，真正的访问控制仍由路由守卫与服务端 `@PreAuthorize` 判定。个人中心（`profile:read`）虽然是 MENU 权限点，但入口固定在右上角用户菜单，由服务端菜单接口显式排除，不下发到侧边栏，避免同一入口出现两次。
 
 18. **数据字典的约束**：`EDUCATION` / `POSITION_LEVEL` / `GENDER` 三本内置字典被员工档案字段按编码引用，因此不允许删除（可停用），字典编码创建后也不可修改。字典项被员工档案使用时删除会被拒绝（409，提示引用人数），应改为停用。员工新增/编辑会校验学历、职级、性别必须命中"已启用"的字典项，否则返回 400 而不是静默落库——历史脏值在下次保存时会被要求修正。状态类枚举（员工/申请/用户状态）仍由后端枚举与前端 `utils/dict.ts` 各自维护，尚未收进字典表。
 
@@ -181,10 +189,76 @@ A：当前账号没有对应权限点或超出数据范围，属于预期行为�
 **Q：如何重置演示数据？**
 A：清空数据库后重启（local profile）即可重新初始化：`psql -U postgres -d company_info -f database/schema.sql` 前可先 drop 相关表。
 
-## 部署
+## 部署（生产）
 
-生产部署（Nginx 同源部署、环境变量、数据库备份等）见 [docs/deployment.md](docs/deployment.md)。
+生产环境建议同源部署：Nginx 作为唯一入口，静态托管前端 `dist`，`/api/` 反向代理到后端，PostgreSQL 不暴露公网。
 
-阿里云轻量应用服务器（Ubuntu 镜像 + PostgreSQL 17）从选镜像到上线的完整流程见 [docs/deployment-alibaba-cloud.md](docs/deployment-alibaba-cloud.md)。
+### 1. 构建
 
+```bash
+cd frontend && npm ci && npm run build            # 产物 frontend/dist/
+cd backend && ./mvnw clean package -DskipTests   # 产物 backend/target/company-info-system-0.0.1-SNAPSHOT.jar
+```
+
+### 2. 初始化数据库
+
+```bash
+psql -U postgres -c "CREATE USER company_app WITH PASSWORD '<强密码>';"
+psql -U postgres -c "CREATE DATABASE company_info OWNER company_app;"
+psql -U postgres -d company_info -f database/schema.sql
+```
+
+- 首个管理员账号需手动插入 `sys_user`（BCrypt 哈希）与 `sys_user_role` 绑定，并显式设置 `must_change_password = TRUE`，首次登录强制改密；哈希可用 `htpasswd -bnBC 10 "" '<密码>' | tr -d ':\n'` 生成。
+- **已有库升级**：不要重跑 `schema.sql`（`CREATE TABLE` 不会给已存在的表补列），按 `database/migrations/README.md` 的顺序执行迁移脚本；漏跑会表现为登录报 `字段 "must_change_password" 不存在` 这类缺列错误。
+
+### 3. 环境变量
+
+| 变量 | 生产取值 |
+|---|---|
+| `DB_URL` | `jdbc:postgresql://127.0.0.1:5432/company_info` |
+| `DB_USERNAME` / `DB_PASSWORD` | 数据库账号与强密码 |
+| `JWT_SECRET` | 至少 32 字节的随机字符串，不足启动直接失败 |
+| `SEED_DEMO_DATA` | 必须为 `false`，否则空库会写入演示账号 |
+| `SPRINGDOC_ENABLED` | 必须为 `false`，关闭后接口文档路由不注册、且被安全链拦成 401 |
+
+用 systemd `EnvironmentFile`、K8s Secret 等注入，不要把口令提交进仓库。
+
+### 4. 以 systemd 托管后端
+
+```ini
+[Unit]
+Description=Company Info System
+After=network.target postgresql.service
+
+[Service]
+EnvironmentFile=/etc/company-info-system/env
+ExecStart=/usr/bin/java -jar /opt/company-info-system/app.jar
+SuccessExitStatus=143
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+后端默认监听 `8080`。健康检查（无需鉴权）：`curl http://127.0.0.1:8080/api/v1/health`。
+
+### 5. Nginx 要点
+
+- `/` → 前端 `dist` 静态文件，SPA 路由 fallback 到 `index.html`
+- `/api/` → `http://127.0.0.1:8080/api/`（保持路径不变）
+- 必须启用 HTTPS 并下发 HSTS；另加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: same-origin`、`Content-Security-Policy`
+- `/swagger-ui/`、`/v3/api-docs/` 兜底 `return 404`，与 `SPRINGDOC_ENABLED=false` 形成双层保险
+- 设置合理的 `client_max_body_size` 与超时；透传 `X-Forwarded-For`，审计日志与登录限流的来源 IP 依赖它
+
+### 6. 备份与恢复
+
+```bash
+# 备份（每日 cron 示例）
+pg_dump -U company_app -Fc company_info > /backup/company_info_$(date +%F).dump
+
+# 恢复
+pg_restore -U company_app -d company_info --clean /backup/company_info_<日期>.dump
+```
+
+备份文件加密存储、访问受控，恢复演练至少每季度一次。
 
