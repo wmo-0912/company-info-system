@@ -10,7 +10,9 @@ import java.util.Map;
 @Data
 public class ChangeRequestCreateDTO {
 
-    @NotNull(message = "员工不能为空")
+    /**
+     * 员工 ID。入职（ONBOARD）申请允许为空：此时新员工信息放在 payload 里，批准时才建档并开通账号。
+     */
     private Long employeeId;
 
     @NotNull(message = "变更类型不能为空")
@@ -22,6 +24,11 @@ public class ChangeRequestCreateDTO {
     @Size(max = 2000)
     private String reason;
 
-    /** 调岗时必填 targetDepartmentId，可选 targetPositionName */
+    /**
+     * 类型相关的附加信息：
+     * 调岗填 targetDepartmentId / targetPositionName；入职且未指定员工时填
+     * employeeNo / employeeName / departmentId（必填）与 gender / birthDate / phone / email /
+     * positionName / positionLevelCode / educationCode（可选）。
+     */
     private Map<String, Object> payload;
 }

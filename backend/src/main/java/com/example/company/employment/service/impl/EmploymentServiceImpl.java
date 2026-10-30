@@ -16,6 +16,7 @@ import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.employment.dto.ChangeRequestCreateDTO;
@@ -31,6 +32,7 @@ import com.example.company.project.entity.ProjectTeamMember;
 import com.example.company.project.mapper.ProjectTeamMemberMapper;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.AccountProvisioningService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -40,6 +42,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
@@ -56,6 +59,8 @@ public class EmploymentServiceImpl implements EmploymentService {
     private final SysUserMapper userMapper;
     private final DataScopeService dataScopeService;
     private final AuditService auditService;
+    private final DictionaryService dictionaryService;
+    private final AccountProvisioningService accountProvisioningService;
 
     @Override
     public PageResponse<ChangeRequestVO> page(int page, int pageSize, String status, String changeType, Long employeeId) {
@@ -66,7 +71,9 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
         QueryWrapper<EmployeeChangeRequest> qw = new QueryWrapper<>();
         if (visible != null) {
-            qw.in("employee_id", visible);
+            // 尚未建档的入职申请没有 employee_id，只有申请人自己能在列表里看到它
+            Long me = SecurityUtils.getCurrentUserId();
+            qw.and(w -> w.in("employee_id", visible).or().isNull("employee_id").eq("submitted_by", me));
         }
         if (StringUtils.hasText(status)) {
             qw.eq("status", status);
@@ -85,7 +92,7 @@ public class EmploymentServiceImpl implements EmploymentService {
     @Override
     public ChangeRequestVO detail(Long id) {
         EmployeeChangeRequest req = requireRequest(id);
-        assertEmployeeVisible(req.getEmployeeId());
+        assertRequestVisible(req);
         return toVO(req);
     }
 
@@ -96,29 +103,42 @@ public class EmploymentServiceImpl implements EmploymentService {
     @Override
     public ChangeRequestVO create(ChangeRequestCreateDTO dto) {
         ChangeType changeType = parseChangeType(dto.getChangeType());
-        Employee employee = requireEmployee(dto.getEmployeeId());
-        validateRequestForEmployee(changeType, employee, dto);
-
-        // 同一员工不允许存在进行中的同类型请求
-        Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
-                .eq("employee_id", employee.getId())
-                .eq("change_type", changeType.name())
-                .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name()));
-        if (inFlight > 0) {
-            throw BusinessException.conflict("该员工存在进行中的同类型申请");
+        Employee employee = dto.getEmployeeId() == null ? null : requireEmployee(dto.getEmployeeId());
+        if (employee == null) {
+            // 入职申请可以不选员工：新员工由流程建档，批准时才落库并开通账号
+            if (changeType != ChangeType.ONBOARD) {
+                throw BusinessException.badRequest("仅入职（ONBOARD）申请可以不指定员工，其余类型必须选择员工");
+            }
+            validatePayload(changeType, dto.getPayload());
+            String employeeNo = assertHirePayloadComplete(dto.getPayload());
+            assertNoInFlightOnboarding(employeeNo);
+        } else {
+            validateRequestForEmployee(changeType, employee, dto);
+            // 同一员工不允许存在进行中的同类型请求
+            Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
+                    .eq("employee_id", employee.getId())
+                    .eq("change_type", changeType.name())
+                    .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name()));
+            if (inFlight > 0) {
+                throw BusinessException.conflict("该员工存在进行中的同类型申请");
+            }
         }
 
         EmployeeChangeRequest req = new EmployeeChangeRequest();
-        req.setEmployeeId(employee.getId());
+        req.setEmployeeId(employee == null ? null : employee.getId());
         req.setChangeType(changeType.name());
         req.setStatus(RequestStatus.DRAFT.name());
         req.setEffectiveDate(dto.getEffectiveDate());
         req.setReason(dto.getReason());
-        req.setPayload(dto.getPayload() == null ? Map.of() : dto.getPayload());
+        // 复制一份：调用方传进来的可能是不可变 Map，批准阶段还要往里写 snapshot
+        req.setPayload(dto.getPayload() == null ? new HashMap<>() : new HashMap<>(dto.getPayload()));
         req.setSubmittedBy(SecurityUtils.getCurrentUserId());
         insertWithUniqueRequestNo(req);
         auditService.success("employment:create", "change_request", req.getId(),
-                "创建" + changeType.name() + "申请，员工ID=" + employee.getId());
+                "创建" + changeType.name() + "申请，"
+                        + (employee == null
+                        ? "新员工工号=" + req.getPayload().get("employeeNo")
+                        : "员工ID=" + employee.getId()));
         return toVO(req);
     }
 
@@ -170,7 +190,20 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
 
         // 批准：事务内更新员工主档 + 写入任职历史 + 更新申请状态
-        Employee employee = requireEmployee(req.getEmployeeId());
+        Employee employee;
+        String onboardDetail;
+        if (req.getEmployeeId() == null) {
+            // 流程建档：申请里只有新员工信息，批准这一刻才真正创建档案并回填关联
+            if (!ChangeType.ONBOARD.name().equals(req.getChangeType())) {
+                throw BusinessException.unprocessable("申请缺少员工信息，无法办理");
+            }
+            employee = createPendingEmployee(req);
+            req.setEmployeeId(employee.getId());
+            onboardDetail = "新建员工档案 " + employee.getEmployeeNo();
+        } else {
+            employee = requireEmployee(req.getEmployeeId());
+            onboardDetail = null;
+        }
         // 主档更新前取快照，批准后据此生成字段级变更（部门/岗位/状态/日期）
         AuditDiff.Snapshot before = AuditDiff.snapshot(employee);
         applyApproval(req, employee);
@@ -178,6 +211,12 @@ public class EmploymentServiceImpl implements EmploymentService {
         String resignDetail = ChangeType.RESIGN.name().equals(req.getChangeType())
                 ? cascadeResignation(employee, req.getEffectiveDate())
                 : null;
+        String accountDetail = null;
+        if (ChangeType.ONBOARD.name().equals(req.getChangeType())) {
+            // 入职批准后自动开通账号：用户名=工号，初始密码不回响应，管理员用「重置密码」线下交付
+            AccountProvisioningService.Result account = accountProvisioningService.provision(employee);
+            accountDetail = account == null ? null : account.detail();
+        }
 
         EmployeeEmploymentRecord record = new EmployeeEmploymentRecord();
         record.setEmployeeId(employee.getId());
@@ -193,8 +232,10 @@ public class EmploymentServiceImpl implements EmploymentService {
         String employeeDiff = AuditDiff.describe(before, employee, this::formatAuditValue);
         auditService.success("employment:approve", "change_request", id,
                 "批准申请 " + req.getRequestNo()
+                        + (onboardDetail == null ? "" : "；" + onboardDetail)
                         + (employeeDiff.isEmpty() ? "" : "；" + employeeDiff)
-                        + (resignDetail == null ? "" : "；" + resignDetail));
+                        + (resignDetail == null ? "" : "；" + resignDetail)
+                        + (accountDetail == null ? "" : "；" + accountDetail));
         return toVO(req);
     }
 
@@ -263,7 +304,11 @@ public class EmploymentServiceImpl implements EmploymentService {
         if (payload == null || payload.isEmpty()) {
             return;
         }
-        Set<String> allowed = type == ChangeType.TRANSFER ? TRANSFER_PAYLOAD_KEYS : Set.of();
+        Set<String> allowed = switch (type) {
+            case TRANSFER -> TRANSFER_PAYLOAD_KEYS;
+            case ONBOARD -> ONBOARD_HIRE_KEYS;
+            default -> Set.of();
+        };
         for (String key : payload.keySet()) {
             if (INTERNAL_PAYLOAD_KEYS.contains(key)) {
                 continue;
@@ -393,6 +438,134 @@ public class EmploymentServiceImpl implements EmploymentService {
                 + " 个、清理部门负责人 " + clearedManagers + " 处";
     }
 
+    // ==================== 入职流程建档 ====================
+
+    /** 入职申请可携带的新员工字段（其余键一律拒绝，避免脏数据静默写库） */
+    private static final Set<String> ONBOARD_HIRE_KEYS = Set.of(
+            "employeeNo", "employeeName", "gender", "birthDate", "phone", "email",
+            "departmentId", "positionName", "positionLevelCode", "educationCode");
+    private static final int MAX_EMPLOYEE_NO_LENGTH = 32;
+    private static final int MAX_EMPLOYEE_NAME_LENGTH = 100;
+
+    /** 校验新员工必备字段，返回工号 */
+    private String assertHirePayloadComplete(Map<String, Object> payload) {
+        String employeeNo = textOf(payload, "employeeNo");
+        if (employeeNo == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供工号 employeeNo");
+        }
+        if (employeeNo.length() > MAX_EMPLOYEE_NO_LENGTH) {
+            throw BusinessException.badRequest("工号不能超过 " + MAX_EMPLOYEE_NO_LENGTH + " 个字符");
+        }
+        String employeeName = textOf(payload, "employeeName");
+        if (employeeName == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供姓名 employeeName");
+        }
+        if (employeeName.length() > MAX_EMPLOYEE_NAME_LENGTH) {
+            throw BusinessException.badRequest("姓名不能超过 " + MAX_EMPLOYEE_NAME_LENGTH + " 个字符");
+        }
+        if (departmentIdOf(payload) == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供部门 departmentId");
+        }
+        // 学历/职级/性别与档案编辑同口径：必须取自启用状态的字典项
+        dictionaryService.validateDictionaryItem("EDUCATION", textOf(payload, "educationCode"), "学历");
+        dictionaryService.validateDictionaryItem("POSITION_LEVEL", textOf(payload, "positionLevelCode"), "职位层级");
+        dictionaryService.validateDictionaryItem("GENDER", textOf(payload, "gender"), "性别");
+        String birthDate = textOf(payload, "birthDate");
+        if (birthDate != null) {
+            parseDate(birthDate);
+        }
+        if (employeeMapper.selectCount(new QueryWrapper<Employee>().eq("employee_no", employeeNo)) > 0) {
+            throw BusinessException.conflict("工号已存在: " + employeeNo);
+        }
+        return employeeNo;
+    }
+
+    /** 同一工号不允许有进行中的入职申请（员工还没建档，只能按 payload 里的工号判重） */
+    private void assertNoInFlightOnboarding(String employeeNo) {
+        Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
+                .eq("change_type", ChangeType.ONBOARD.name())
+                .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name())
+                .apply("payload ->> 'employeeNo' = {0}", employeeNo));
+        if (inFlight != null && inFlight > 0) {
+            throw BusinessException.conflict("工号 " + employeeNo + " 存在进行中的入职申请");
+        }
+    }
+
+    /** 按申请里的新员工信息建档（PENDING），随后由 applyApproval 转成试用期并写入任职历史 */
+    private Employee createPendingEmployee(EmployeeChangeRequest req) {
+        Map<String, Object> payload = req.getPayload();
+        String employeeNo = assertHirePayloadComplete(payload);
+        Employee employee = new Employee();
+        employee.setEmployeeNo(employeeNo);
+        employee.setEmployeeName(textOf(payload, "employeeName"));
+        employee.setGender(textOf(payload, "gender"));
+        String birthDate = textOf(payload, "birthDate");
+        employee.setBirthDate(birthDate == null ? null : parseDate(birthDate));
+        employee.setPhone(textOf(payload, "phone"));
+        employee.setEmail(textOf(payload, "email"));
+        employee.setDepartmentId(departmentIdOf(payload));
+        employee.setPositionName(textOf(payload, "positionName"));
+        employee.setPositionLevelCode(textOf(payload, "positionLevelCode"));
+        employee.setEducationCode(textOf(payload, "educationCode"));
+        employee.setEmploymentStatus(EmployeeStatus.PENDING.name());
+        employee.setHireDate(req.getEffectiveDate());
+        employeeMapper.insert(employee);
+        return employee;
+    }
+
+    private String textOf(Map<String, Object> payload, String key) {
+        if (payload == null) {
+            return null;
+        }
+        Object value = payload.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private Long departmentIdOf(Map<String, Object> payload) {
+        String raw = textOf(payload, "departmentId");
+        if (raw == null) {
+            return null;
+        }
+        Long departmentId;
+        try {
+            departmentId = Long.valueOf(raw);
+        } catch (NumberFormatException e) {
+            throw BusinessException.badRequest("部门 ID 格式不正确");
+        }
+        Department dept = departmentMapper.selectById(departmentId);
+        if (dept == null || !"ACTIVE".equals(dept.getStatus())) {
+            throw BusinessException.badRequest("部门不存在或已停用");
+        }
+        return departmentId;
+    }
+
+    private LocalDate parseDate(String raw) {
+        try {
+            return LocalDate.parse(raw, DateTimeFormatter.ISO_LOCAL_DATE);
+        } catch (DateTimeParseException e) {
+            throw BusinessException.badRequest("出生日期格式不正确，应为 yyyy-MM-dd");
+        }
+    }
+
+    /** 申请可见性：已建档的按数据范围，尚未建档的只有申请人本人或全量数据范围可见 */
+    private void assertRequestVisible(EmployeeChangeRequest req) {
+        if (req.getEmployeeId() != null) {
+            assertEmployeeVisible(req.getEmployeeId());
+            return;
+        }
+        Long me = SecurityUtils.getCurrentUserId();
+        if (me != null && me.equals(req.getSubmittedBy())) {
+            return;
+        }
+        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), null, DataModule.EMPLOYMENT)) {
+            throw BusinessException.forbidden("无权访问该申请");
+        }
+    }
+
     private ChangeRequestCreateDTO toDTO(EmployeeChangeRequest req) {
         ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
         dto.setEmployeeId(req.getEmployeeId());
@@ -480,7 +653,7 @@ public class EmploymentServiceImpl implements EmploymentService {
         vo.setId(req.getId());
         vo.setRequestNo(req.getRequestNo());
         vo.setEmployeeId(req.getEmployeeId());
-        Employee employee = employeeMapper.selectById(req.getEmployeeId());
+        Employee employee = req.getEmployeeId() == null ? null : employeeMapper.selectById(req.getEmployeeId());
         if (employee != null) {
             vo.setEmployeeName(employee.getEmployeeName());
             vo.setEmployeeNo(employee.getEmployeeNo());

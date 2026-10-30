@@ -139,9 +139,9 @@ export interface EmploymentRecordVO {
 export interface ChangeRequestVO {
   id: number
   requestNo: string
-  employeeId: number
-  employeeName: string
-  employeeNo: string
+  employeeId: number | null
+  employeeName: string | null
+  employeeNo: string | null
   changeType: string
   status: string
   effectiveDate: string

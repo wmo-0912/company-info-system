@@ -168,7 +168,7 @@ CREATE INDEX idx_record_employee_date ON employee_employment_record (employee_id
 CREATE TABLE employee_change_request (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     request_no      VARCHAR(40)  NOT NULL UNIQUE,
-    employee_id     BIGINT       NOT NULL REFERENCES employee (id),
+    employee_id     BIGINT       NULL REFERENCES employee (id), -- 入职申请可先不带员工，批准时才建档
     change_type     VARCHAR(20)  NOT NULL, -- ONBOARD / REGULARIZE / TRANSFER / RESIGN
     status          VARCHAR(20)  NOT NULL DEFAULT 'DRAFT', -- DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED
     effective_date  DATE         NOT NULL,

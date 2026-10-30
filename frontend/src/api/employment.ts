@@ -10,7 +10,8 @@ export interface ChangeRequestPageParams {
 }
 
 export interface ChangeRequestCreateBody {
-  employeeId: number
+  /** 入职（ONBOARD）申请设为新员工由流程建档时可传 null */
+  employeeId: number | null
   changeType: string
   effectiveDate: string
   reason?: string | null
