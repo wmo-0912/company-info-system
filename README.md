@@ -82,20 +82,11 @@ cd backend; .\mvnw.cmd clean test
 cd frontend; npm run type-check; npm run build
 ```
 
-## 演示账号（仅开发环境）
+## 账号与初始密码
 
-以下账号由 `local` profile 的开发数据初始化器创建，数据库只存 BCrypt 哈希。**禁止在生产使用，生产启动时不会自动创建任何账号。**
+生产环境启动时不会创建任何账号，首个管理员需按「部署」一节手动插入并强制首登改密。
 
-| 用户名 | 密码 | 角色 | 数据范围 |
-|---|---|---|---|
-| `admin` | `Admin@123` | 系统管理员（ADMIN） | 全部 |
-| `hr` | `Hr@123456` | 人事（HR） | 全部 |
-| `pm` | `Pm@123456` | 项目经理（PROJECT_MANAGER） | 负责的项目组 |
-| `zhangsan` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
-| `lisi` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
-| `wangwu` | `Emp@123456` | 普通员工（EMPLOYEE） | 仅本人 |
-
-登录页不展示任何测试账号，避免向公网访客暴露默认口令。
+开发环境的数据由 `DevDataInitializer` 生成：设置 `SEED_DEMO_DATA=true`（`local` profile 默认开启）后首次启动会写入示例部门、员工、项目组与 6 个演示账号（`admin`、`hr`、`pm`、`zhangsan`、`lisi`、`wangwu`）。口令只在该初始化器里维护，文档不再列出——这些账号只存在于本地开发库，与生产无关；登录页同样不展示任何测试账号。
 
 新用户的初始密码由管理员创建用户时设置并**线下交付**（系统无邮件/短信服务，不会自动发送通知）。
 
