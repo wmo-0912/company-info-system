@@ -17,6 +17,11 @@
         </el-select>
         <el-button type="primary" @click="reload">查询</el-button>
         <div class="spacer" />
+        <el-tag v-for="p in lockedPeriods" :key="p.periodKey" type="warning" class="lock-tag">
+          {{ p.periodKey }} 已锁定
+        </el-tag>
+        <el-button v-if="auth.has('performance:review')" @click="onToggleLock(true)">锁定期</el-button>
+        <el-button v-if="auth.has('performance:review')" @click="onToggleLock(false)">解锁期</el-button>
         <el-button v-if="auth.has('performance:create')" type="primary" @click="openDialog()">新建评价</el-button>
       </div>
       <el-table v-loading="loading" :data="records">
@@ -131,10 +136,13 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import {
   createReview,
   fetchMyReviews,
+  fetchPeriods,
   pageReviews,
   returnReview,
+  setPeriodLocked,
   submitReview,
-  updateReview
+  updateReview,
+  type PerformancePeriodVO
 } from '@/api/performance'
 import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import type { PerformanceReviewVO } from '@/api/types'
@@ -149,6 +157,7 @@ const reviewStatusOptions = dictOptions('reviewStatus')
 const filterPeriodType = ref('')
 const filterPeriodKey = ref('')
 const filterStatus = ref('')
+const lockedPeriods = ref<PerformancePeriodVO[]>([])
 const records = ref<PerformanceReviewVO[]>([])
 const loading = ref(false)
 const page = ref(1)
@@ -185,6 +194,32 @@ const formRules: FormRules = {
 }
 
 const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
+
+async function loadPeriods() {
+  lockedPeriods.value = (await fetchPeriods()).filter((p) => p.locked)
+}
+
+/** 锁定/解锁周期：周期标识取筛选条件，未填则弹窗询问 */
+async function onToggleLock(locked: boolean) {
+  let periodKey = filterPeriodKey.value.trim()
+  if (!periodKey) {
+    const input = await ElMessageBox.prompt('请输入周期标识，例如 2026-Q3', locked ? '锁定期' : '解锁期', {
+      inputPattern: /^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/,
+      inputErrorMessage: '格式应为 YYYY-MM 或 YYYY-Qn'
+    })
+    periodKey = input.value.trim()
+  }
+  await ElMessageBox.confirm(
+    locked
+      ? `锁定后周期 ${periodKey} 内不能再新增、修改或提交评价，确定锁定？`
+      : `确定解除周期 ${periodKey} 的锁定？`,
+    locked ? '锁定期' : '解锁期',
+    { type: 'warning' }
+  )
+  await setPeriodLocked(periodKey, locked)
+  ElMessage.success(locked ? '已锁定该周期' : '已解除锁定')
+  await loadPeriods()
+}
 
 async function load() {
   loading.value = true
@@ -300,10 +335,17 @@ async function onSubmitReview(row: PerformanceReviewVO) {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadPeriods()
+})
 </script>
 
 <style scoped>
+.lock-tag {
+  margin-right: 4px;
+}
+
 .pager {
   margin-top: 12px;
   justify-content: flex-end;

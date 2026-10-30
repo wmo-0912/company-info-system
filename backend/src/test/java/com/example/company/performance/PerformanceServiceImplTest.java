@@ -11,6 +11,7 @@ import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.performance.dto.PerformanceReviewRequest;
 import com.example.company.performance.entity.PerformanceReview;
 import com.example.company.performance.mapper.PerformanceReviewMapper;
+import com.example.company.performance.service.PerformancePeriodService;
 import com.example.company.performance.service.impl.PerformanceServiceImpl;
 import com.example.company.project.entity.ProjectTeam;
 import com.example.company.project.entity.ProjectTeamMember;
@@ -54,6 +55,8 @@ class PerformanceServiceImplTest {
     private AuditService auditService;
     @Mock
     private DataScopeService dataScopeService;
+    @Mock
+    private PerformancePeriodService periodService;
 
     @InjectMocks
     private PerformanceServiceImpl service;
@@ -314,5 +317,51 @@ class PerformanceServiceImplTest {
 
         BusinessException ex = assertThrows(BusinessException.class, () -> service.create(newRequest(11L, 100L)));
         assertEquals(409, ex.getHttpStatus());
+    }
+
+    @Test
+    @DisplayName("周期锁定后不能新建评价")
+    void createRejectedWhenPeriodLocked() {
+        Employee target = new Employee();
+        target.setId(11L);
+        when(employeeMapper.selectById(11L)).thenReturn(target);
+        ProjectTeam team = new ProjectTeam();
+        team.setId(100L);
+        team.setManagerEmployeeId(7L);
+        when(teamMapper.selectList(any())).thenReturn(List.of(team));
+        when(memberMapper.selectCount(any())).thenReturn(1L);
+        PerformanceReviewRequest request = new PerformanceReviewRequest();
+        request.setEmployeeId(11L);
+        request.setProjectTeamId(100L);
+        request.setPeriodType("MONTHLY");
+        request.setPeriodKey("2026-09");
+        request.setScore(new java.math.BigDecimal("90"));
+        when(periodService.isLocked("2026-09")).thenReturn(true);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(request));
+
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("已锁定"), ex.getMessage());
+        verify(reviewMapper, never()).insert(any(PerformanceReview.class));
+    }
+
+    @Test
+    @DisplayName("周期锁定后不能提交评价")
+    void submitRejectedWhenPeriodLocked() {
+        PerformanceReview review = new PerformanceReview();
+        review.setId(5L);
+        review.setEmployeeId(20L);
+        review.setReviewerEmployeeId(7L);
+        review.setPeriodKey("2026-09");
+        review.setStatus(ReviewStatus.DRAFT.name());
+        review.setScore(new java.math.BigDecimal("88"));
+        when(reviewMapper.selectById(5L)).thenReturn(review);
+        when(periodService.isLocked("2026-09")).thenReturn(true);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.submit(5L));
+
+        assertEquals(422, ex.getHttpStatus());
+        assertEquals(ReviewStatus.DRAFT.name(), review.getStatus());
+        verify(reviewMapper, never()).updateById(any(PerformanceReview.class));
     }
 }

@@ -241,6 +241,18 @@ CREATE TABLE performance_review (
     UNIQUE (employee_id, reviewer_employee_id, period_type, period_key)
 );
 
+-- 绩效周期锁定：只登记被显式锁定/解锁过的周期，未登记的周期视为未锁定
+CREATE TABLE performance_period (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    period_key VARCHAR(20) NOT NULL UNIQUE, -- 例如 2026-09 / 2026-Q3，与 performance_review.period_key 对应
+    locked     BOOLEAN     NOT NULL DEFAULT FALSE,
+    locked_at  TIMESTAMPTZ NULL,
+    locked_by  BIGINT      NULL REFERENCES sys_user (id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
 CREATE INDEX idx_review_employee_period ON performance_review (employee_id, period_type, period_key);
 
 COMMIT;

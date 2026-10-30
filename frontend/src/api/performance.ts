@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut } from './http'
+import { apiGet, apiPatch, apiPost, apiPut } from './http'
 import type { PageResponse, PerformanceReviewVO } from './types'
 
 export interface ReviewPageParams {
@@ -46,4 +46,21 @@ export function submitReview(id: number) {
 /** 人事复核退回，原因只进审计日志 */
 export function returnReview(id: number, reason?: string) {
   return apiPost<PerformanceReviewVO>(`/performance-reviews/${id}/return`, { reason: reason || null })
+}
+
+export interface PerformancePeriodVO {
+  periodKey: string
+  locked: boolean
+  lockedAt?: string | null
+  lockedBy?: number | null
+}
+
+/** 已登记的绩效周期（含锁定状态） */
+export function fetchPeriods() {
+  return apiGet<PerformancePeriodVO[]>('/performance-periods')
+}
+
+/** 锁定/解锁某个绩效周期：锁定后该周期不能新增、修改、提交评价 */
+export function setPeriodLocked(periodKey: string, locked: boolean) {
+  return apiPatch<PerformancePeriodVO>(`/performance-periods/${encodeURIComponent(periodKey)}/lock`, { locked })
 }

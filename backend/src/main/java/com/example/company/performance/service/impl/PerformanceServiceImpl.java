@@ -15,6 +15,7 @@ import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.performance.dto.PerformanceReviewRequest;
 import com.example.company.performance.entity.PerformanceReview;
 import com.example.company.performance.mapper.PerformanceReviewMapper;
+import com.example.company.performance.service.PerformancePeriodService;
 import com.example.company.performance.service.PerformanceService;
 import com.example.company.performance.vo.PerformanceReviewVO;
 import com.example.company.project.entity.ProjectTeam;
@@ -41,6 +42,7 @@ public class PerformanceServiceImpl implements PerformanceService {
     private final ProjectTeamMemberMapper memberMapper;
     private final AuditService auditService;
     private final DataScopeService dataScopeService;
+    private final PerformancePeriodService periodService;
 
     @Override
     public PageResponse<PerformanceReviewVO> page(int page, int pageSize, String periodType, String periodKey, String status) {
@@ -117,6 +119,7 @@ public class PerformanceServiceImpl implements PerformanceService {
             throw BusinessException.forbidden("当前账号未关联员工档案，无法评价");
         }
         validateReviewable(request, reviewerEmployeeId);
+        assertPeriodOpen(request.getPeriodKey());
 
         // 唯一约束（employee, reviewer, period_type, period_key）
         Long exists = reviewMapper.selectCount(new QueryWrapper<PerformanceReview>()
@@ -159,6 +162,9 @@ public class PerformanceServiceImpl implements PerformanceService {
             throw BusinessException.unprocessable("已提交的评价不可修改，如需变更请联系人事退回");
         }
         validateReviewable(request, review.getReviewerEmployeeId());
+        // 改周期时要同时检查旧周期与新周期：锁定的周期既不能被改内容，也不能被改出去
+        assertPeriodOpen(review.getPeriodKey());
+        assertPeriodOpen(request.getPeriodKey());
         review.setProjectTeamId(request.getProjectTeamId());
         review.setPeriodType(request.getPeriodType());
         review.setPeriodKey(request.getPeriodKey());
@@ -189,6 +195,7 @@ public class PerformanceServiceImpl implements PerformanceService {
         if (review.getScore() == null) {
             throw BusinessException.unprocessable("提交前必须填写评分");
         }
+        assertPeriodOpen(review.getPeriodKey());
         review.setStatus(ReviewStatus.SUBMITTED.name());
         review.setSubmittedAt(OffsetDateTime.now());
         reviewMapper.updateById(review);
@@ -227,6 +234,13 @@ public class PerformanceServiceImpl implements PerformanceService {
                         .in("status", ReviewStatus.SUBMITTED.name(), ReviewStatus.RETURNED.name())
                         .orderByDesc("created_at"));
         return PageResponse.from(result, this::toVO);
+    }
+
+    /** 周期锁定后不允许新增/修改/提交，避免汇总完成后记录又被改回去 */
+    private void assertPeriodOpen(String periodKey) {
+        if (periodService.isLocked(periodKey)) {
+            throw BusinessException.unprocessable("绩效周期 " + periodKey + " 已锁定，不能再新增或修改评价");
+        }
     }
 
     /** 校验被评价人是当前用户负责的项目组的有效成员（管理员/人事拥有全局权限可跳过项目组校验） */
