@@ -92,13 +92,38 @@ class DepartmentServiceImplTest {
         // 1 <- 2 <- 3；将 1 的父部门改为 3 形成环
         when(departmentMapper.selectById(1L)).thenReturn(dept(1L, null));
         when(departmentMapper.selectById(3L)).thenReturn(dept(3L, 2L));
-        when(departmentMapper.selectById(2L)).thenReturn(dept(2L, 1L));
+        when(departmentMapper.selectList(any())).thenReturn(List.of(dept(1L, null), dept(2L, 1L), dept(3L, 2L)));
         DepartmentRequest req = new DepartmentRequest();
         req.setDepartmentCode("D1");
         req.setDepartmentName("部门1");
         req.setParentId(3L);
         BusinessException ex = assertThrows(BusinessException.class, () -> service.update(1L, req));
         assertEquals(422, ex.getHttpStatus());
+    }
+
+    @Test
+    void treeLoadsManagerNamesInBatch() {
+        Department a = dept(1L, null);
+        a.setManagerEmployeeId(9L);
+        Department b = dept(2L, 1L);
+        b.setManagerEmployeeId(10L);
+        when(departmentMapper.selectList(any())).thenReturn(List.of(a, b));
+        Employee e9 = new Employee();
+        e9.setId(9L);
+        e9.setEmployeeName("张三");
+        Employee e10 = new Employee();
+        e10.setId(10L);
+        e10.setEmployeeName("李四");
+        when(employeeMapper.selectBatchIds(any())).thenReturn(List.of(e9, e10));
+
+        List<com.example.company.department.vo.DepartmentVO> roots = service.tree();
+
+        assertEquals(1, roots.size());
+        assertEquals("张三", roots.get(0).getManagerEmployeeName());
+        assertEquals("李四", roots.get(0).getChildren().get(0).getManagerEmployeeName());
+        // 负责人姓名一次批量查回，不再逐节点 selectById
+        verify(employeeMapper).selectBatchIds(any());
+        verify(employeeMapper, never()).selectById(any());
     }
 
     @Test

@@ -76,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（202 个单元/切片测试，不依赖数据库）
+# 后端测试（203 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -157,7 +157,7 @@ cd frontend; npm run type-check; npm run build
 
 27. **绩效申诉**：员工可对本人收到的已提交（`SUBMITTED`）评价提出申诉（`POST /api/v1/performance-reviews/{id}/appeal`），理由必填、≤500 字，同一评价同时只允许一条待处理申诉（重复提交返回 409）。人事/管理员在 `GET /api/v1/performance-appeals` 中按数据范围看到申诉，`POST /api/v1/performance-appeals/{id}/handle` 受理或驳回：受理只把评价置回 `RETURNED`（仍走「退回→评价人改稿→重提」的原路径，不直接改分），驳回必须填写处理意见；处理人不能是申诉人本人。申诉人可在 `GET /api/v1/performance-appeals/my` 查看本人申诉进度。表结构见 `database/schema.sql` 的 `performance_appeal`，存量库执行 `database/migrations/2026-10-30-performance-appeal.sql`。前端绩效页新增「我的申诉」与「申诉处理」两个页签。
 
-28. **列表批量组装（避免 N+1）**：分页/列表接口先收集本页关联的员工、部门、用户 id，用一次 `selectBatchIds` 查回 Map 再组装 VO——绩效列表（员工/评价人/项目组）、绩效申诉（评价/申诉人/处理人/评价人）、项目组列表（负责人姓名与在职成员数）、项目组成员（员工与部门）、任职记录（新旧部门与操作人）、用户列表（员工姓名与角色）。单条详情/新建/更新仍走单行查询，不在本批范围。
+28. **列表批量组装（避免 N+1）**：分页/列表接口先收集本页关联的员工、部门、用户 id，用一次 `selectBatchIds` 查回 Map 再组装 VO——绩效列表（员工/评价人/项目组）、绩效申诉（评价/申诉人/处理人/评价人）、项目组列表（负责人姓名与在职成员数）、项目组成员（员工与部门）、任职记录（新旧部门与操作人）、用户列表（员工姓名与角色）、部门树与部门分页（负责人姓名）。部门调整的防环校验也改为一次取回全部 `id → parent_id` 在内存里向上回溯，不再按层级逐次查库。单条详情/新建/更新仍走单行查询，不在本批范围。
 
 29. **登录按 IP 限流**：同一来源 IP 在 5 分钟内失败 10 次后，登录接口直接返回 429（`TOO_MANY_REQUESTS`，提示「登录尝试过于频繁，请 5 分钟后再试」），成功登录会清空该 IP 的计数。来源 IP 取 `X-Forwarded-For` 首段（Nginx 反代场景），其次 `X-Real-IP`，最后 `remoteAddr`，与审计日志共用 `ClientIp` 解析。按 D02「最小技术栈」不引入 Redis，计数保存在进程内存中（`LoginRateLimiter`，`ConcurrentHashMap` + 滑动窗口），因此**只对单实例部署有效**；多实例部署时每个实例独立计数，需按实例数放大阈值或改由网关/Nginx `limit_req` 兜底。累计失败 5 次锁定账号的规则仍在限流之前生效，两者互补：锁定针对账号，限流针对来源。
 
