@@ -262,6 +262,21 @@ CREATE TABLE performance_period (
 );
 
 
+-- 绩效申诉：员工对已提交评价有异议时提出，人事受理（退回评价人复核）或驳回
+CREATE TABLE performance_appeal (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    review_id           BIGINT       NOT NULL REFERENCES performance_review (id) ON DELETE CASCADE,
+    employee_id         BIGINT       NOT NULL REFERENCES employee (id),
+    reason              VARCHAR(500) NOT NULL,
+    status              VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING / ACCEPTED / REJECTED
+    handler_employee_id BIGINT       NULL REFERENCES employee (id),
+    handle_comment      VARCHAR(500) NULL,
+    handled_at          TIMESTAMPTZ  NULL,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
 CREATE INDEX idx_review_employee_period ON performance_review (employee_id, period_type, period_key);
+CREATE INDEX idx_appeal_review ON performance_appeal (review_id);
+CREATE INDEX idx_appeal_status ON performance_appeal (status, created_at);
 
 COMMIT;

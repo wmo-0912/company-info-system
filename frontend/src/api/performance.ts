@@ -83,6 +83,50 @@ export function fetchPerformanceSummary(periodType?: string, periodKey?: string)
   })
 }
 
+export type AppealStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
+
+export interface PerformanceAppealVO {
+  id: number
+  reviewId: number
+  employeeId: number
+  employeeName: string | null
+  reviewerEmployeeId: number | null
+  reviewerName: string | null
+  periodType: string | null
+  periodKey: string | null
+  score: number | null
+  reason: string
+  status: AppealStatus
+  handlerEmployeeId: number | null
+  handlerName: string | null
+  handleComment: string | null
+  handledAt: string | null
+  createdAt: string | null
+}
+
+/** 员工对本人收到的已提交评价提出申诉 */
+export function createAppeal(reviewId: number, reason: string) {
+  return apiPost<PerformanceAppealVO>(`/performance-reviews/${reviewId}/appeal`, { reason })
+}
+
+/** 我提出的申诉 */
+export function fetchMyAppeals(page: number, pageSize: number) {
+  return apiGet<PageResponse<PerformanceAppealVO>>('/performance-appeals/my', { page, pageSize })
+}
+
+/** 申诉分页（人事/管理员处理用） */
+export function fetchAppeals(page: number, pageSize: number, status?: string) {
+  return apiGet<PageResponse<PerformanceAppealVO>>('/performance-appeals', { page, pageSize, status })
+}
+
+/** 处理申诉：ACCEPT 受理（评价退回评价人复核）/ REJECT 驳回 */
+export function handleAppeal(id: number, decision: 'ACCEPT' | 'REJECT', comment?: string) {
+  return apiPost<PerformanceAppealVO>(`/performance-appeals/${id}/handle`, {
+    decision,
+    comment: comment || null
+  })
+}
+
 export interface PerformancePeriodVO {
   periodKey: string
   locked: boolean

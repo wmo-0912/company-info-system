@@ -3,6 +3,8 @@
     <el-tabs v-model="tab">
       <el-tab-pane label="绩效列表" name="list" />
       <el-tab-pane label="我的绩效" name="my" />
+      <el-tab-pane label="我的申诉" name="appeals" />
+      <el-tab-pane v-if="auth.has('performance:review')" label="申诉处理" name="review" />
     </el-tabs>
 
     <template v-if="tab === 'list'">
@@ -89,12 +91,85 @@
           </template>
         </el-table-column>
         <el-table-column prop="comment" label="评语" show-overflow-tooltip />
+        <el-table-column label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'SUBMITTED'" link type="warning" @click="onAppeal(row)">申诉</el-button>
+          </template>
+        </el-table-column>
         <template #empty>
           <el-empty description="暂无我的绩效" />
         </template>
       </el-table>
       <el-pagination v-if="myTotal > 0" class="pager" layout="total, prev, pager, next" :total="myTotal"
         :page-size="myPageSize" :current-page="myPage" @current-change="onMyPage" />
+    </template>
+
+    <template v-else-if="tab === 'appeals'">
+      <el-table v-loading="appealLoading" :data="myAppeals">
+        <el-table-column prop="periodKey" label="周期" width="110" />
+        <el-table-column label="评分" width="80">
+          <template #default="{ row }">{{ row.score ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="reason" label="申诉理由" show-overflow-tooltip />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="appealTagType(row.status)">{{ appealLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="handleComment" label="处理意见" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.handleComment || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="handlerName" label="处理人" width="110">
+          <template #default="{ row }">{{ row.handlerName || '-' }}</template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无申诉" />
+        </template>
+      </el-table>
+      <el-pagination v-if="appealTotal > 0" class="pager" layout="total, prev, pager, next" :total="appealTotal"
+        :page-size="10" :current-page="appealPage" @current-change="onAppealPage" />
+    </template>
+
+    <template v-else>
+      <div class="page-toolbar">
+        <el-select v-model="appealFilterStatus" placeholder="状态" clearable style="width: 140px" @change="loadPendingAppeals">
+          <el-option label="待处理" value="PENDING" />
+          <el-option label="已受理" value="ACCEPTED" />
+          <el-option label="已驳回" value="REJECTED" />
+        </el-select>
+        <el-button @click="loadPendingAppeals">刷新</el-button>
+      </div>
+      <el-table v-loading="pendingLoading" :data="pendingAppeals">
+        <el-table-column label="员工" width="130">
+          <template #default="{ row }">{{ row.employeeName || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="periodKey" label="周期" width="110" />
+        <el-table-column label="评分" width="80">
+          <template #default="{ row }">{{ row.score ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="reason" label="申诉理由" show-overflow-tooltip />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="appealTagType(row.status)">{{ appealLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="handleComment" label="处理意见" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.handleComment || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <template v-if="row.status === 'PENDING'">
+              <el-button link type="primary" @click="onHandleAppeal(row, 'ACCEPT')">受理</el-button>
+              <el-button link type="danger" @click="onHandleAppeal(row, 'REJECT')">驳回</el-button>
+            </template>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无申诉" />
+        </template>
+      </el-table>
+      <el-pagination v-if="pendingTotal > 0" class="pager" layout="total, prev, pager, next" :total="pendingTotal"
+        :page-size="10" :current-page="pendingPage" @current-change="onPendingPage" />
     </template>
 
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑评价' : '新建评价'" width="520px" destroy-on-close>
@@ -186,8 +261,12 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
+  createAppeal,
   createReview,
+  fetchAppeals,
+  fetchMyAppeals,
   fetchPerformanceSummary,
+  handleAppeal,
   fetchMyReviews,
   fetchPeriods,
   pageReviews,
@@ -195,6 +274,8 @@ import {
   setPeriodLocked,
   submitReview,
   updateReview,
+  type AppealStatus,
+  type PerformanceAppealVO,
   type PerformancePeriodVO,
   type PerformanceSummary
 } from '@/api/performance'
@@ -204,7 +285,7 @@ import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
-const tab = ref<'list' | 'my'>('list')
+const tab = ref<'list' | 'my' | 'appeals' | 'review'>('list')
 
 const periodTypeOptions = dictOptions('periodType')
 const reviewStatusOptions = dictOptions('reviewStatus')
@@ -224,6 +305,25 @@ const myPage = ref(1)
 const myPageSize = 10
 const myTotal = ref(0)
 const myLoaded = ref(false)
+
+const myAppeals = ref<PerformanceAppealVO[]>([])
+const appealLoading = ref(false)
+const appealPage = ref(1)
+const appealTotal = ref(0)
+const pendingAppeals = ref<PerformanceAppealVO[]>([])
+const pendingLoading = ref(false)
+const pendingPage = ref(1)
+const pendingTotal = ref(0)
+const appealFilterStatus = ref('PENDING')
+
+const APPEAL_LABELS: Record<AppealStatus, string> = {
+  PENDING: '待处理',
+  ACCEPTED: '已受理',
+  REJECTED: '已驳回'
+}
+const appealLabel = (status: AppealStatus) => APPEAL_LABELS[status] || status
+const appealTagType = (status: AppealStatus) =>
+  status === 'PENDING' ? 'warning' : status === 'ACCEPTED' ? 'success' : 'danger'
 
 const dialogVisible = ref(false)
 const editing = ref<PerformanceReviewVO | null>(null)
@@ -321,6 +421,72 @@ function reload() {
   load()
 }
 
+async function loadMyAppeals() {
+  appealLoading.value = true
+  try {
+    const res = await fetchMyAppeals(appealPage.value, 10)
+    myAppeals.value = res.records
+    appealTotal.value = res.total
+  } finally {
+    appealLoading.value = false
+  }
+}
+
+function onAppealPage(p: number) {
+  appealPage.value = p
+  loadMyAppeals()
+}
+
+async function loadPendingAppeals() {
+  pendingLoading.value = true
+  try {
+    const res = await fetchAppeals(pendingPage.value, 10, appealFilterStatus.value || undefined)
+    pendingAppeals.value = res.records
+    pendingTotal.value = res.total
+  } finally {
+    pendingLoading.value = false
+  }
+}
+
+function onPendingPage(p: number) {
+  pendingPage.value = p
+  loadPendingAppeals()
+}
+
+/** 员工对本人收到的评价提出申诉，理由必填 */
+async function onAppeal(row: PerformanceReviewVO) {
+  const { value } = await ElMessageBox.prompt('请说明申诉理由，人事会据此复核', '绩效申诉', {
+    inputType: 'textarea',
+    inputPlaceholder: '如：本季度承担了额外项目，评分未体现',
+    inputValidator: (val) => (val && val.trim().length > 0) || '请填写申诉理由',
+    inputValue: ''
+  })
+  await createAppeal(row.id, value.trim())
+  ElMessage.success('申诉已提交，等待人事处理')
+  loadMy()
+}
+
+/** 人事处理申诉：受理会把评价退回评价人复核，驳回必须写处理意见 */
+async function onHandleAppeal(row: PerformanceAppealVO, decision: 'ACCEPT' | 'REJECT') {
+  const { value } = await ElMessageBox.prompt(
+    decision === 'ACCEPT'
+      ? '受理后该评价会退回评价人重新评分，请填写处理意见'
+      : '请填写驳回原因（会记入审计日志）',
+    decision === 'ACCEPT' ? '受理申诉' : '驳回申诉',
+    {
+      inputType: 'textarea',
+      inputValidator: (val) => {
+        if (decision === 'REJECT' && (!val || !val.trim())) return '驳回必须填写处理意见'
+        return true
+      },
+      inputValue: ''
+    }
+  )
+  await handleAppeal(row.id, decision, value?.trim())
+  ElMessage.success(decision === 'ACCEPT' ? '已受理，评价已退回评价人' : '已驳回')
+  loadPendingAppeals()
+}
+
 async function loadMy() {
   myLoading.value = true
   try {
@@ -340,6 +506,8 @@ function onMyPage(p: number) {
 
 watch(tab, (t) => {
   if (t === 'my' && !myLoaded.value) loadMy()
+  if (t === 'appeals') loadMyAppeals()
+  if (t === 'review') loadPendingAppeals()
 })
 
 async function openDialog(row?: PerformanceReviewVO) {
