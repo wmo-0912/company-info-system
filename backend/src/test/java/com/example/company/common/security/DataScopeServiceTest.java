@@ -84,6 +84,51 @@ class DataScopeServiceTest {
         assertEquals(Set.of(1L, 2L, 3L), ids);
     }
 
+    @Test
+    void canAccessProjectAllowsAllScope() {
+        assertTrue(dataScopeService.canAccessProject(user("ALL", 99L), projectTeam(7L)));
+    }
+
+    @Test
+    void canAccessProjectAllowsManagerInProjectScope() {
+        assertTrue(dataScopeService.canAccessProject(user("PROJECT", 7L), projectTeam(7L)));
+    }
+
+    @Test
+    void canAccessProjectChecksActiveMembershipInProjectScope() {
+        when(projectTeamMemberMapper.selectCount(any())).thenReturn(1L);
+        assertTrue(dataScopeService.canAccessProject(user("PROJECT", 11L), projectTeam(7L)));
+    }
+
+    @Test
+    void canAccessProjectRejectsOutsiderInProjectScope() {
+        when(projectTeamMemberMapper.selectCount(any())).thenReturn(0L);
+        assertFalse(dataScopeService.canAccessProject(user("PROJECT", 12L), projectTeam(7L)));
+    }
+
+    @Test
+    void canAccessProjectRejectsSelfScopeWithoutMembership() {
+        when(projectTeamMemberMapper.selectCount(any())).thenReturn(0L);
+        assertFalse(dataScopeService.canAccessProject(user("SELF", 12L), projectTeam(7L)));
+    }
+
+    @Test
+    void canAccessProjectRejectsNullTeam() {
+        assertFalse(dataScopeService.canAccessProject(user("PROJECT", 7L), null));
+    }
+
+    @Test
+    void canAccessProjectRejectsUserWithoutEmployee() {
+        assertFalse(dataScopeService.canAccessProject(user("PROJECT", null), projectTeam(7L)));
+    }
+
+    private ProjectTeam projectTeam(Long managerEmployeeId) {
+        ProjectTeam t = new ProjectTeam();
+        t.setId(100L);
+        t.setManagerEmployeeId(managerEmployeeId);
+        return t;
+    }
+
     private Department dept(Long id, Long parentId) {
         Department d = new Department();
         d.setId(id);

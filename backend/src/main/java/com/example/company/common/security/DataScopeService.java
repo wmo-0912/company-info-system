@@ -104,4 +104,35 @@ public class DataScopeService {
         Set<Long> visible = visibleEmployeeIds(user);
         return visible == null || visible.contains(employeeId);
     }
+
+    /**
+     * 校验项目组是否在当前用户数据范围内（用于详情、成员等按 ID 直查的读操作）。
+     * ALL / DEPARTMENT 可见全部项目组（与列表口径一致）；
+     * PROJECT 仅本人负责或本人在组的项目组；SELF 仅本人在组的项目组。
+     */
+    public boolean canAccessProject(LoginUser user, ProjectTeam team) {
+        if (team == null) {
+            return false;
+        }
+        String scope = user.getDataScope() == null ? DataScopeType.SELF.name() : user.getDataScope();
+        return switch (DataScopeType.valueOf(scope)) {
+            case ALL, DEPARTMENT -> true;
+            case PROJECT -> isProjectManager(user, team) || isActiveMember(user.getEmployeeId(), team.getId());
+            case SELF -> isActiveMember(user.getEmployeeId(), team.getId());
+        };
+    }
+
+    private boolean isProjectManager(LoginUser user, ProjectTeam team) {
+        return user.getEmployeeId() != null && user.getEmployeeId().equals(team.getManagerEmployeeId());
+    }
+
+    private boolean isActiveMember(Long employeeId, Long projectTeamId) {
+        if (employeeId == null || projectTeamId == null) {
+            return false;
+        }
+        return projectTeamMemberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
+                .eq("project_team_id", projectTeamId)
+                .eq("employee_id", employeeId)
+                .isNull("left_at")) > 0;
+    }
 }

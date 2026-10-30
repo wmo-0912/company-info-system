@@ -6,6 +6,8 @@ import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
+import com.example.company.common.security.DataScopeService;
+import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.dto.DepartmentRequest;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
@@ -30,6 +32,7 @@ public class DepartmentServiceImpl implements DepartmentService {
 
     private final DepartmentMapper departmentMapper;
     private final EmployeeMapper employeeMapper;
+    private final DataScopeService dataScopeService;
     private final AuditService auditService;
 
     @Override
@@ -126,7 +129,15 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Override
     public PageResponse<EmployeeListItemVO> employees(Long id, int page, int pageSize, String status) {
         requireDepartment(id);
+        // 部门维度列表同样受数据权限约束，否则可绕过员工列表按部门 ID 直查全员
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(SecurityUtils.getCurrentUser());
+        if (visible != null && visible.isEmpty()) {
+            return PageResponse.of(List.of(), page, pageSize, 0);
+        }
         QueryWrapper<Employee> qw = new QueryWrapper<Employee>().eq("department_id", id);
+        if (visible != null) {
+            qw.in("id", visible);
+        }
         if (org.springframework.util.StringUtils.hasText(status)) {
             List<String> statuses = java.util.Arrays.stream(status.split(","))
                     .map(String::trim).filter(org.springframework.util.StringUtils::hasText).toList();

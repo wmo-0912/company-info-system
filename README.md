@@ -74,7 +74,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（48 个单元/切片测试，不依赖数据库）
+# 后端测试（61 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -111,7 +111,7 @@ cd frontend; npm run type-check; npm run build
 
 ## 数据范围
 
-多角色取最大范围：`ALL` 全部 → `DEPARTMENT` 本部门及子部门 → `PROJECT` 负责项目组及有效成员 → `SELF` 仅本人。员工列表/详情、任职记录、绩效、项目组均按数据范围过滤。
+多角色取最大范围：`ALL` 全部 → `DEPARTMENT` 本部门及子部门 → `PROJECT` 负责项目组及有效成员 → `SELF` 仅本人。员工列表/详情、部门员工列表、任职记录、绩效、项目组列表/详情/成员均按数据范围过滤（按 ID 直查同样校验，避免越权遍历）。
 
 ## 设计假设
 

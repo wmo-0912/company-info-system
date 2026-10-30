@@ -6,6 +6,7 @@ import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
+import com.example.company.common.security.DataScopeService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
@@ -41,6 +42,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final ProjectTeamMemberMapper memberMapper;
     private final EmployeeMapper employeeMapper;
     private final DepartmentMapper departmentMapper;
+    private final DataScopeService dataScopeService;
     private final AuditService auditService;
 
     @Override
@@ -83,7 +85,9 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     public ProjectVO detail(Long id) {
-        return toVO(requireTeam(id));
+        ProjectTeam team = requireTeam(id);
+        assertVisible(team);
+        return toVO(team);
     }
 
     @Override
@@ -120,7 +124,8 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     public List<ProjectMemberVO> members(Long id) {
-        requireTeam(id);
+        ProjectTeam team = requireTeam(id);
+        assertVisible(team);
         List<ProjectTeamMember> members = memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
                 .eq("project_team_id", id).orderByAsc("joined_at"));
         return members.stream().map(this::toMemberVO).toList();
@@ -184,6 +189,13 @@ public class ProjectServiceImpl implements ProjectService {
         managed.forEach(t -> all.put(t.getId(), t));
         joined.forEach(t -> all.put(t.getId(), t));
         return all.values().stream().map(this::toVO).toList();
+    }
+
+    /** 读操作校验：项目组必须在当前用户数据范围内，避免按 ID 直查越权 */
+    private void assertVisible(ProjectTeam team) {
+        if (!dataScopeService.canAccessProject(SecurityUtils.getCurrentUser(), team)) {
+            throw BusinessException.forbidden("无权查看该项目组");
+        }
     }
 
     /** 管理操作校验：拥有全局权限或本人是负责人 */
