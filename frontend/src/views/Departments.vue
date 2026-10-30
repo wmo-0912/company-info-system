@@ -31,7 +31,7 @@
             <div style="display: flex; align-items: center; justify-content: space-between;">
               <span>{{ selected ? `${selected.departmentName} - 员工列表` : '请选择左侧部门' }}</span>
               <el-radio-group v-if="selected" v-model="empStatus" size="small" @change="onStatusChange">
-                <el-radio-button value="PROBATION,REGULAR,TRANSFERRED">在职员工</el-radio-button>
+                <el-radio-button value="PROBATION,REGULAR">在职员工</el-radio-button>
                 <el-radio-button value="PENDING">待入职</el-radio-button>
                 <el-radio-button value="">全部</el-radio-button>
               </el-radio-group>
@@ -115,7 +115,7 @@ const empLoading = ref(false)
 const empPage = ref(1)
 const empPageSize = 10
 const empTotal = ref(0)
-const empStatus = ref('PROBATION,REGULAR,TRANSFERRED')
+const empStatus = ref('PROBATION,REGULAR')
 
 const dialogVisible = ref(false)
 const editing = ref<DepartmentVO | null>(null)

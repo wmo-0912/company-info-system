@@ -59,7 +59,7 @@ public class EmployeeServiceImpl implements EmployeeService {
             qw.in("department_id", dataScopeService.expandDepartmentIds(departmentId));
         }
         if (StringUtils.hasText(status)) {
-            // 支持逗号分隔多状态，如 "PROBATION,REGULAR,TRANSFERRED"（在职）或 "PENDING"（待入职）
+            // 支持逗号分隔多状态，如 "PROBATION,REGULAR"（在职）或 "PENDING"（待入职）
             List<String> statuses = java.util.Arrays.stream(status.split(","))
                     .map(String::trim).filter(StringUtils::hasText).toList();
             if (statuses.size() == 1) {

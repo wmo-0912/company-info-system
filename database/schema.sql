@@ -112,7 +112,7 @@ CREATE TABLE employee (
     position_level_code      VARCHAR(64)  NULL,
     manager_employee_id      BIGINT       NULL REFERENCES employee (id),
     hire_date                DATE         NULL,
-    employment_status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING/PROBATION/REGULAR/TRANSFERRED/RESIGNED
+    employment_status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING/PROBATION/REGULAR/RESIGNED（调岗不改变状态）
     resignation_date         DATE         NULL,
     remark                   TEXT         NULL,
     created_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),

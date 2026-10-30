@@ -31,6 +31,7 @@ import com.example.company.project.mapper.ProjectTeamMemberMapper;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -87,8 +88,11 @@ public class EmploymentServiceImpl implements EmploymentService {
         return toVO(req);
     }
 
+    /**
+     * 创建申请。不使用事务包装：申请号在高并发下仍可能撞唯一键，重试需要每条 insert 各自独立提交
+     * （PostgreSQL 同一事务里一旦违反唯一约束就会进入 aborted 状态，同事务重试必然继续失败）。
+     */
     @Override
-    @Transactional
     public ChangeRequestVO create(ChangeRequestCreateDTO dto) {
         ChangeType changeType = parseChangeType(dto.getChangeType());
         Employee employee = requireEmployee(dto.getEmployeeId());
@@ -104,7 +108,6 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
 
         EmployeeChangeRequest req = new EmployeeChangeRequest();
-        req.setRequestNo(generateRequestNo());
         req.setEmployeeId(employee.getId());
         req.setChangeType(changeType.name());
         req.setStatus(RequestStatus.DRAFT.name());
@@ -112,7 +115,7 @@ public class EmploymentServiceImpl implements EmploymentService {
         req.setReason(dto.getReason());
         req.setPayload(dto.getPayload() == null ? Map.of() : dto.getPayload());
         req.setSubmittedBy(SecurityUtils.getCurrentUserId());
-        requestMapper.insert(req);
+        insertWithUniqueRequestNo(req);
         auditService.success("employment:create", "change_request", req.getId(),
                 "创建" + changeType.name() + "申请，员工ID=" + employee.getId());
         return toVO(req);
@@ -240,6 +243,11 @@ public class EmploymentServiceImpl implements EmploymentService {
 
     // ==================== 内部规则 ====================
 
+    /** 在职（可调岗、可离职）的两种状态：试用期与正式 */
+    private boolean isEmployed(String status) {
+        return EmployeeStatus.PROBATION.name().equals(status) || EmployeeStatus.REGULAR.name().equals(status);
+    }
+
     private void validateRequestForEmployee(ChangeType type, Employee employee, ChangeRequestCreateDTO dto) {
         String status = employee.getEmploymentStatus();
         switch (type) {
@@ -254,8 +262,7 @@ public class EmploymentServiceImpl implements EmploymentService {
                 }
             }
             case TRANSFER -> {
-                if (!Set.of(EmployeeStatus.PROBATION.name(), EmployeeStatus.REGULAR.name(),
-                        EmployeeStatus.TRANSFERRED.name()).contains(status)) {
+                if (!isEmployed(status)) {
                     throw BusinessException.unprocessable("当前员工状态不允许调岗");
                 }
                 Long targetDeptId = extractTargetDepartmentId(dto);
@@ -271,8 +278,7 @@ public class EmploymentServiceImpl implements EmploymentService {
                 }
             }
             case RESIGN -> {
-                if (!Set.of(EmployeeStatus.PROBATION.name(), EmployeeStatus.REGULAR.name(),
-                        EmployeeStatus.TRANSFERRED.name()).contains(status)) {
+                if (!isEmployed(status)) {
                     throw BusinessException.unprocessable("当前员工状态不允许办理离职");
                 }
                 if (dto.getEffectiveDate().isBefore(java.time.LocalDate.now().minusYears(5))) {
@@ -304,7 +310,8 @@ public class EmploymentServiceImpl implements EmploymentService {
                 if (targetPos != null && StringUtils.hasText(String.valueOf(targetPos))) {
                     employee.setPositionName(String.valueOf(targetPos));
                 }
-                employee.setEmploymentStatus(EmployeeStatus.TRANSFERRED.name());
+                // 调岗只改部门与岗位，在职状态保持不变：试用期调岗仍是 PROBATION，转正后调岗仍是 REGULAR，
+                // 否则"已调岗"这种一次性事件会被写成终身状态，后续转正/离职判断全部失效。
             }
             case RESIGN -> {
                 employee.setEmploymentStatus(EmployeeStatus.RESIGNED.name());
@@ -407,9 +414,31 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
     }
 
+    /**
+     * 申请号：CR + 毫秒级时间戳 + 6 位随机数，共 23 字符（列宽 40）。
+     * 毫秒 + 6 位随机把同毫秒碰撞概率压到百万分之一以下，仍保留唯一键兜底并配合重试。
+     */
     private String generateRequestNo() {
-        return "CR" + OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-                + String.format("%04d", ThreadLocalRandom.current().nextInt(10000));
+        return "CR" + OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
+                + String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
+    }
+
+    private static final int REQUEST_NO_ATTEMPTS = 3;
+
+    /** 插入申请，唯一键冲突（申请号重复）时重新取号重试，最多 {@value #REQUEST_NO_ATTEMPTS} 次 */
+    private void insertWithUniqueRequestNo(EmployeeChangeRequest req) {
+        for (int attempt = 1; ; attempt++) {
+            req.setRequestNo(generateRequestNo());
+            try {
+                requestMapper.insert(req);
+                return;
+            } catch (DuplicateKeyException e) {
+                if (attempt >= REQUEST_NO_ATTEMPTS) {
+                    throw BusinessException.conflict("申请号生成冲突，请稍后重试");
+                }
+                req.setId(null);
+            }
+        }
     }
 
     private ChangeRequestVO toVO(EmployeeChangeRequest req) {

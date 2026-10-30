@@ -5,8 +5,7 @@ const maps: Record<string, Record<string, string>> = {
     PENDING: '待入职',
     PROBATION: '试用期',
     REGULAR: '正式',
-    TRANSFERRED: '已调岗',
-    RESIGNED: '已离职'
+      RESIGNED: '已离职'
   },
   changeType: {
     ONBOARD: '入职',
@@ -64,8 +63,7 @@ const tagTypes: Record<string, Record<string, TagType>> = {
     PENDING: 'info',
     PROBATION: 'warning',
     REGULAR: 'success',
-    TRANSFERRED: 'primary',
-    RESIGNED: 'danger'
+      RESIGNED: 'danger'
   },
   requestStatus: {
     DRAFT: 'info',

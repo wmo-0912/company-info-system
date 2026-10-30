@@ -30,12 +30,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.example.company.common.security.LoginUser;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -239,10 +241,76 @@ class EmploymentServiceImplTest {
 
         assertEquals(2L, e.getDepartmentId());
         assertEquals("高级后端工程师", e.getPositionName());
-        assertEquals(EmployeeStatus.TRANSFERRED.name(), e.getEmploymentStatus());
+        assertEquals(EmployeeStatus.REGULAR.name(), e.getEmploymentStatus(), "调岗不应改变在职状态");
         verify(employeeMapper).updateById(e);
         verify(recordMapper).insert(any(EmployeeEmploymentRecord.class));
         assertEquals("APPROVED", req.getStatus());
+    }
+
+    @Test
+    void approveTransferKeepsProbationStatus() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        Department target = new Department();
+        target.setId(2L);
+        target.setStatus("ACTIVE");
+        EmployeeChangeRequest req = submittedRequest("TRANSFER");
+        req.getPayload().put("targetDepartmentId", 2L);
+
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+        service.process(100L, dto);
+
+        assertEquals(EmployeeStatus.PROBATION.name(), e.getEmploymentStatus(), "试用期调岗后仍是试用期");
+    }
+
+    @Test
+    void createRetriesWhenRequestNoCollides() {
+        Employee e = employeeWithStatus(EmployeeStatus.PENDING.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        // 用 Answer 记录每次调用时的申请号：入参是同一个实体，事后再取只能看到最后一次的号
+        List<String> numbers = new ArrayList<>();
+        when(requestMapper.insert(any(EmployeeChangeRequest.class))).thenAnswer(invocation -> {
+            EmployeeChangeRequest r = invocation.getArgument(0);
+            numbers.add(r.getRequestNo());
+            if (numbers.size() == 1) {
+                throw new DuplicateKeyException("duplicate request_no");
+            }
+            return 1;
+        });
+
+        service.create(onboardDto());
+
+        assertEquals(2, numbers.size());
+        assertNotEquals(numbers.get(0), numbers.get(1), "重试必须重新取号");
+        verify(auditService).success(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFailsWith409WhenRequestNoKeepsColliding() {
+        Employee e = employeeWithStatus(EmployeeStatus.PENDING.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(requestMapper.insert(any(EmployeeChangeRequest.class)))
+                .thenThrow(new DuplicateKeyException("duplicate request_no"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(onboardDto()));
+
+        assertEquals(409, ex.getHttpStatus());
+        verify(requestMapper, times(3)).insert(any(EmployeeChangeRequest.class));
+        verify(auditService, never()).success(any(), any(), any(), any());
+    }
+
+    private ChangeRequestCreateDTO onboardDto() {
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        return dto;
     }
 
     @Test

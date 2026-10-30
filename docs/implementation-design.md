@@ -417,7 +417,7 @@ npm run dev
 - `position_level_code VARCHAR(64) NULL`
 - `manager_employee_id BIGINT NULL FK employee`
 - `hire_date DATE NULL`
-- `employment_status VARCHAR(20) NOT NULL`：`PENDING` / `PROBATION` / `REGULAR` / `TRANSFERRED` / `RESIGNED`
+- `employment_status VARCHAR(20) NOT NULL`：`PENDING` / `PROBATION` / `REGULAR` / `RESIGNED`（调岗不是状态，只改部门与岗位，事件记在任职历史）
 - `resignation_date DATE NULL`
 - `remark TEXT NULL`
 - `created_at`, `updated_at`, `deleted`
