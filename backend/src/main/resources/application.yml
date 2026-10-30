@@ -1,0 +1,45 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: company-info-system
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/company_info}
+    username: ${DB_USERNAME:company_app}
+    password: ${DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: "true"
+      logic-not-delete-value: "false"
+
+app:
+  jwt:
+    # 生产环境必须通过环境变量注入高熵密钥，禁止将真实密钥提交到仓库
+    secret: ${JWT_SECRET:}
+    expiration-minutes: ${JWT_EXPIRATION_MINUTES:120}
+  seed-demo-data: ${SEED_DEMO_DATA:false}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    root: INFO
+    com.example.company: INFO

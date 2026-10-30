@@ -1,0 +1,1 @@
+import{N as r,L as s,M as a,O as p}from"./index-DVgGDkAj.js";function m(){return a("/departments/tree")}function c(t){return s("/departments",t)}function o(t,e){return r(`/departments/${t}`,e)}function i(t,e){return p(`/departments/${t}/status`,{status:e})}function f(t,e,n){return a(`/departments/${t}/employees`,{page:e,pageSize:n})}export{f as a,i as b,c,m as f,o as u};
