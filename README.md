@@ -39,7 +39,7 @@ psql -U postgres -d company_info -f database/schema.sql
 
 ### 2. 启动后端
 
-后端配置通过环境变量注入。本地开发可直接使用 `application-local.yml`（已内置本地连接与演示数据开关）：
+后端配置通过环境变量注入。本地开发可直接使用 `application-local.yml`（不入库，按需自行创建）：
 
 ```powershell
 cd backend
@@ -47,7 +47,8 @@ cd backend
 ```
 
 - 服务地址：`http://localhost:8080`
-- `local` profile 下 `app.seed-demo-data=true`，首次启动在空库中自动写入演示数据（角色、权限、部门、员工、用户、项目组、字典等）
+- 代码里不含任何账号、口令或示例业务数据：账号在「用户管理」中创建，或由运维直接在数据库里维护
+- 空库首次部署如需内置权限点与四角色，启动前设 `INIT_PERMISSIONS=true`（默认 `false`，只同步权限点与角色，不创建账号）
 - Swagger UI（生产默认关闭）：`http://localhost:8080/swagger-ui/index.html`
   - 本地想看接口文档，启动时叠加 dev profile：`.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local,dev"`，或设 `SPRINGDOC_ENABLED=true`
   - 未开启时 `/swagger-ui/**`、`/v3/api-docs/**` 不注册路由并被安全链拦成 401
@@ -59,7 +60,7 @@ cd backend
 | `DB_URL` | JDBC 连接串，如 `jdbc:postgresql://localhost:5432/company_info` |
 | `DB_USERNAME` / `DB_PASSWORD` | 数据库账号密码 |
 | `JWT_SECRET` | JWT 签名密钥，**至少 32 字节**，不足启动直接失败 |
-| `SEED_DEMO_DATA` | 是否写入演示数据，生产必须为 `false` |
+| `INIT_PERMISSIONS` | 是否同步内置权限点与四角色，默认 `false`；空库首次部署时置 `true` 跑一次即可，不创建账号 |
 
 ### 3. 启动前端
 
@@ -75,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（204 个单元/切片测试，不依赖数据库）
+# 后端测试（207 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -84,9 +85,9 @@ cd frontend; npm run type-check; npm run build
 
 ## 账号与初始密码
 
-生产环境启动时不会创建任何账号，首个管理员需按「部署」一节手动插入并强制首登改密。
+系统启动时不会创建任何账号，仓库里也没有任何硬编码的账号或口令（演示数据初始化器已移除）。首个管理员需按「部署」一节手动插入 `sys_user` 并绑定 `ADMIN` 角色，或由已登录的管理员在「系统管理 → 用户管理」中创建。
 
-开发环境的数据由 `DevDataInitializer` 生成：设置 `SEED_DEMO_DATA=true`（`local` profile 默认开启）后首次启动会写入示例部门、员工、项目组与 6 个演示账号（`admin`、`hr`、`pm`、`zhangsan`、`lisi`、`wangwu`）。口令只在该初始化器里维护，文档不再列出——这些账号只存在于本地开发库，与生产无关；登录页同样不展示任何测试账号。
+本地/测试库的账号由使用者自行准备：走用户管理界面建号，或直接往 `sys_user` 插一条带 BCrypt 哈希的记录（`must_change_password = TRUE`）。登录页不展示任何测试账号。
 
 新用户的初始密码由管理员创建用户时设置并**线下交付**（系统无邮件/短信服务，不会自动发送通知）。
 
@@ -118,7 +119,7 @@ cd frontend; npm run type-check; npm run build
 ## 设计假设
 
 1. **四角色 vs 五角色**：早期技术选型文档曾提及"五角色权限控制"，但需求文档只定义了四种角色。本系统只初始化 ADMIN / HR / PROJECT_MANAGER / EMPLOYEE 四种角色，权限模型支持未来新增角色，无需改动代码。
-2. **数据库迁移**：采用手动执行 `database/schema.sql` 的方式初始化数据库，未引入 Flyway；**已上线的库升级必须按 `database/migrations/README.md` 的顺序执行迁移脚本**（`schema.sql` 只用于空库，不会给已有表补列）；演示数据由 `app.seed-demo-data=true` 时的 Java 初始化器在运行时生成（BCrypt 哈希在运行时计算，不落明文）。
+2. **数据库迁移**：采用手动执行 `database/schema.sql` 的方式初始化数据库，未引入 Flyway；**已上线的库升级必须按 `database/migrations/README.md` 的顺序执行迁移脚本**（`schema.sql` 只用于空库，不会给已有表补列）；代码中不含任何账号或口令常量，账号一律由数据库或「用户管理」维护（空库首次部署可选 `INIT_PERMISSIONS=true` 同步内置权限点与四角色，该同步不创建账号）。
 3. **退出登录**：系统使用纯无状态 JWT，退出登录为客户端清除 token，已签发的 token 在过期前仍有效（JWT 默认有效期见 `app.jwt.expiration-minutes`）。改密与管理员重置会使旧 token 立即失效（见第 20 条会话版本），但"只踢会话不停号"尚无入口。不过账号被停用（管理员禁用、离职联动）后，旧 token 会在下一次请求即失效——JWT 过滤器每次都会重新加载账号状态并校验 `status = ACTIVE`。
 4. **登录锁定**：连续 5 次密码错误将账号置为 `LOCKED`，需管理员在用户管理中恢复为 `ACTIVE`。失败计数使用单条原子 `UPDATE`（不包事务），因此计数一定会落库；登录成功、失败、被锁定三种结果均写入审计日志并记录来源 IP。账号被停用或锁定后，登录提示与"密码错误"完全一致（真实原因只进审计），避免用正确密码探测账号状态。
 5. **逻辑删除**：核心业务表（用户、角色、部门、员工、项目组）使用 `deleted` 布尔字段软删，物理数据保留；流水/历史表（任职记录、变更申请、审计日志）不做软删。
@@ -177,8 +178,8 @@ A：数据库是旧版结构。按 [database/migrations/README.md](database/migr
 **Q：接口返回 403？**
 A：当前账号没有对应权限点或超出数据范围，属于预期行为；联系管理员在角色管理中调整。
 
-**Q：如何重置演示数据？**
-A：清空数据库后重启（local profile）即可重新初始化：`psql -U postgres -d company_info -f database/schema.sql` 前可先 drop 相关表。
+**Q：如何重置本地测试数据？**
+A：清空数据库后重新建结构与账号：先 `psql -U postgres -d company_info -f database/schema.sql`，再自行插入账号（或经用户管理创建）。应用不会自动生成任何数据。
 
 ## 部署（生产）
 
@@ -209,7 +210,7 @@ psql -U postgres -d company_info -f database/schema.sql
 | `DB_URL` | `jdbc:postgresql://127.0.0.1:5432/company_info` |
 | `DB_USERNAME` / `DB_PASSWORD` | 数据库账号与强密码 |
 | `JWT_SECRET` | 至少 32 字节的随机字符串，不足启动直接失败 |
-| `SEED_DEMO_DATA` | 必须为 `false`，否则空库会写入演示账号 |
+| `INIT_PERMISSIONS` | 生产必须为 `false`（仅在空库首次部署需要同步权限点时临时置 `true`，跑完改回） |
 | `SPRINGDOC_ENABLED` | 必须为 `false`，关闭后接口文档路由不注册、且被安全链拦成 401 |
 
 用 systemd `EnvironmentFile`、K8s Secret 等注入，不要把口令提交进仓库。

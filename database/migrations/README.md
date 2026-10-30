@@ -78,5 +78,5 @@ WHERE table_schema = 'public'
 
 - 每条脚本都带了 `BEGIN/COMMIT` 或幂等的 `IF NOT EXISTS`，重复执行不会报错。
 - `2026-10-30-remove-transferred-status.sql` 会改历史数据，执行前先 `pg_dump -Fc company_info > backup.dbc`。
-- `2026-10-30-menu-driven-permissions.sql` 改的是 `sys_permission` 数据，依赖初始化时已插入菜单权限点；空库请直接用 `schema.sql` + 应用启动时的 `DevDataInitializer` 同步。
+- `2026-10-30-menu-driven-permissions.sql` 改的是 `sys_permission` 数据，依赖初始化时已插入菜单权限点；空库请直接用 `schema.sql`，再以 `INIT_PERMISSIONS=true` 启动一次应用同步权限点。
 - 新增列后无需重启应用之外的额外操作；登录报错的直接原因就是缺列，补齐即可恢复。
