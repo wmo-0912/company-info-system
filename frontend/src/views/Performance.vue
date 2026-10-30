@@ -22,6 +22,7 @@
         </el-tag>
         <el-button v-if="auth.has('performance:review')" @click="onToggleLock(true)">锁定期</el-button>
         <el-button v-if="auth.has('performance:review')" @click="onToggleLock(false)">解锁期</el-button>
+        <el-button v-if="auth.has('performance:review')" @click="openSummary">汇总</el-button>
         <el-button v-if="auth.has('performance:create')" type="primary" @click="openDialog()">新建评价</el-button>
       </div>
       <el-table v-loading="loading" :data="records">
@@ -127,6 +128,57 @@
         <el-button type="primary" :loading="saving" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="summaryVisible" title="绩效汇总" width="720px" destroy-on-close>
+      <div v-loading="summaryLoading">
+        <el-descriptions :column="3" border>
+          <el-descriptions-item label="周期类型">
+            {{ filterPeriodType ? dictLabel('periodType', filterPeriodType) : '全部' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="周期">{{ filterPeriodKey || '全部' }}</el-descriptions-item>
+          <el-descriptions-item label="评价条数">{{ summary?.reviewCount ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="被评价人数">{{ summary?.employeeCount ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item label="平均分">{{ summary?.averageScore ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最高 / 最低">
+            {{ summary?.maxScore ?? '-' }} / {{ summary?.minScore ?? '-' }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <h4 class="summary-title">分数段分布</h4>
+        <el-table :data="summary?.scoreBuckets ?? []" size="small">
+          <el-table-column prop="label" label="分数段" width="120" />
+          <el-table-column prop="count" label="评价条数" width="110" />
+          <el-table-column label="占比">
+            <template #default="{ row }">
+              <el-progress :percentage="percent(row.count)" />
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <h4 class="summary-title">按部门</h4>
+        <el-table :data="summary?.departments ?? []" size="small">
+          <el-table-column prop="name" label="部门" />
+          <el-table-column prop="employeeCount" label="人数" width="90" />
+          <el-table-column prop="reviewCount" label="评价数" width="100" />
+          <el-table-column label="平均分" width="100">
+            <template #default="{ row }">{{ row.averageScore ?? '-' }}</template>
+          </el-table-column>
+        </el-table>
+
+        <h4 class="summary-title">按项目组</h4>
+        <el-table :data="summary?.projects ?? []" size="small">
+          <el-table-column prop="name" label="项目组" />
+          <el-table-column prop="employeeCount" label="人数" width="90" />
+          <el-table-column prop="reviewCount" label="评价数" width="100" />
+          <el-table-column label="平均分" width="100">
+            <template #default="{ row }">{{ row.averageScore ?? '-' }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="summaryVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -135,6 +187,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   createReview,
+  fetchPerformanceSummary,
   fetchMyReviews,
   fetchPeriods,
   pageReviews,
@@ -142,7 +195,8 @@ import {
   setPeriodLocked,
   submitReview,
   updateReview,
-  type PerformancePeriodVO
+  type PerformancePeriodVO,
+  type PerformanceSummary
 } from '@/api/performance'
 import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import type { PerformanceReviewVO } from '@/api/types'
@@ -194,6 +248,30 @@ const formRules: FormRules = {
 }
 
 const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
+
+const summaryVisible = ref(false)
+const summaryLoading = ref(false)
+const summary = ref<PerformanceSummary | null>(null)
+
+/** 按当前筛选的周期打开汇总弹窗 */
+async function openSummary() {
+  summaryVisible.value = true
+  summaryLoading.value = true
+  try {
+    summary.value = await fetchPerformanceSummary(
+      filterPeriodType.value || undefined,
+      filterPeriodKey.value.trim() || undefined
+    )
+  } finally {
+    summaryLoading.value = false
+  }
+}
+
+/** 分数段占比：分母用评价条数 */
+function percent(count: number) {
+  const total = summary.value?.reviewCount ?? 0
+  return total > 0 ? Math.round((count / total) * 100) : 0
+}
 
 async function loadPeriods() {
   lockedPeriods.value = (await fetchPeriods()).filter((p) => p.locked)
@@ -349,5 +427,11 @@ onMounted(() => {
 .pager {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+.summary-title {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  color: #606266;
 }
 </style>

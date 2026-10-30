@@ -48,6 +48,41 @@ export function returnReview(id: number, reason?: string) {
   return apiPost<PerformanceReviewVO>(`/performance-reviews/${id}/return`, { reason: reason || null })
 }
 
+export interface ScoreBucket {
+  label: string
+  count: number
+}
+
+export interface SummaryGroup {
+  id: number | null
+  name: string
+  reviewCount: number
+  employeeCount: number
+  averageScore: number | null
+}
+
+/** 按周期汇总的绩效结果（只统计已提交的评价） */
+export interface PerformanceSummary {
+  periodType: string | null
+  periodKey: string | null
+  reviewCount: number
+  employeeCount: number
+  averageScore: number | null
+  minScore: number | null
+  maxScore: number | null
+  scoreBuckets: ScoreBucket[]
+  departments: SummaryGroup[]
+  projects: SummaryGroup[]
+}
+
+/** 绩效汇总：不传周期则统计全部周期 */
+export function fetchPerformanceSummary(periodType?: string, periodKey?: string) {
+  return apiGet<PerformanceSummary>('/performance-reviews/summary', {
+    periodType: periodType || undefined,
+    periodKey: periodKey || undefined
+  })
+}
+
 export interface PerformancePeriodVO {
   periodKey: string
   locked: boolean

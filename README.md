@@ -76,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（183 个单元/切片测试，不依赖数据库）
+# 后端测试（187 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -152,6 +152,8 @@ cd frontend; npm run type-check; npm run build
 24. **模块级数据范围**：角色除了默认 `data_scope`，还能按模块单独覆盖（`sys_role_module_scope`，模块见后端 `DataModule`：员工档案/组织架构/项目组/绩效考核/入转调离）。登录装配权限时把多角色的模块配置合并、同一模块取范围最大者，未配置的模块沿用角色默认值；`DataScopeService` 提供 `effectiveScope/visibleEmployeeIds(user, module)/canAccessProject(user, team, module)`，各业务服务都带上自己的模块。典型用法是"人事默认看全公司档案、绩效只能看本部门"。角色管理新增 `PUT /api/v1/roles/{id}/module-scopes`（`role:manage`），未知模块或非法取值直接 400，ADMIN 角色的模块配置必须全为 `ALL`（否则管理员会把自己锁在外面）；前端角色编辑弹窗里每个模块一个下拉，留空表示沿用默认。迁移脚本：`database/migrations/2026-10-30-role-module-scope.sql`。
 
 25. **入职流程建档与自动开户**：入职（`ONBOARD`）申请可以不选员工——在 `payload` 里带 `employeeNo` / `employeeName` / `departmentId`（必填）与 `gender` / `birthDate` / `phone` / `email` / `positionName` / `positionLevelCode` / `educationCode`（可选，字典项须已启用），**批准那一刻**才创建员工档案（`PENDING` → 试用期）并写入任职历史，避免草稿阶段往员工表塞半成品。批准后自动开通账号：用户名即工号、角色 `EMPLOYEE`、随机初始密码且强制首登改密；初始密码不回响应，管理员在「用户管理 → 重置密码」线下交付一次性口令。开户失败（工号被占用、缺 `EMPLOYEE` 角色等）只跳过并写进审计摘要，不让已生效的入职回滚。未建档申请没有 `employee_id`，列表/详情只对申请人本人或拥有 `ALL` 数据范围的人可见。迁移脚本：`database/migrations/2026-10-30-onboard-request-null-employee.sql`。
+
+26. **绩效汇总**：`GET /api/v1/performance-reviews/summary`（权限点 `performance:review`，按当前数据范围过滤）只统计已提交（`SUBMITTED`）的评价，可按 `periodType`/`periodKey` 过滤；返回评价条数、被评价人数、平均/最高/最低分、90-100/80-89/70-79/60-69/60 以下五档分布，以及按部门、按项目组的聚合（部门缺失归入「未设置部门」，未挂项目组的归入「未关联项目组」）。单周期明细规模有限（≤200 人），在内存聚合而非多表 group by，便于后续加维度。前端绩效页工具栏「汇总」按钮按当前筛选周期展示。没有评分的记录只计入条数，不参与平均分。
 
 ## 常见问题
 

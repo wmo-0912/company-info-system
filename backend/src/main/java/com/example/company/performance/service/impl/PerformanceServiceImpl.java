@@ -11,6 +11,8 @@ import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
+import com.example.company.department.entity.Department;
+import com.example.company.department.mapper.DepartmentMapper;
 import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.performance.dto.PerformanceReviewRequest;
@@ -19,6 +21,7 @@ import com.example.company.performance.mapper.PerformanceReviewMapper;
 import com.example.company.performance.service.PerformancePeriodService;
 import com.example.company.performance.service.PerformanceService;
 import com.example.company.performance.vo.PerformanceReviewVO;
+import com.example.company.performance.vo.PerformanceSummaryVO;
 import com.example.company.project.entity.ProjectTeam;
 import com.example.company.project.entity.ProjectTeamMember;
 import com.example.company.project.mapper.ProjectTeamMapper;
@@ -29,8 +32,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -44,6 +54,7 @@ public class PerformanceServiceImpl implements PerformanceService {
     private final AuditService auditService;
     private final DataScopeService dataScopeService;
     private final PerformancePeriodService periodService;
+    private final DepartmentMapper departmentMapper;
 
     @Override
     public PageResponse<PerformanceReviewVO> page(int page, int pageSize, String periodType, String periodKey, String status) {
@@ -235,6 +246,185 @@ public class PerformanceServiceImpl implements PerformanceService {
                         .in("status", ReviewStatus.SUBMITTED.name(), ReviewStatus.RETURNED.name())
                         .orderByDesc("created_at"));
         return PageResponse.from(result, this::toVO);
+    }
+
+
+    @Override
+    public PerformanceSummaryVO summary(String periodType, String periodKey) {
+        LoginUser current = SecurityUtils.getCurrentUser();
+        PerformanceSummaryVO vo = new PerformanceSummaryVO();
+        vo.setPeriodType(periodType);
+        vo.setPeriodKey(periodKey);
+
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.PERFORMANCE);
+        if (visible != null && visible.isEmpty()) {
+            return emptySummary(vo); // 数据范围内没有任何员工，直接返回全零
+        }
+
+        QueryWrapper<PerformanceReview> qw = new QueryWrapper<PerformanceReview>()
+                .eq("status", ReviewStatus.SUBMITTED.name()); // 只统计已提交，草稿与被退回的都不算
+        if (StringUtils.hasText(periodType)) {
+            qw.eq("period_type", periodType.trim());
+        }
+        if (StringUtils.hasText(periodKey)) {
+            qw.eq("period_key", periodKey.trim());
+        }
+        if (visible != null) {
+            qw.in("employee_id", visible);
+        }
+        List<PerformanceReview> reviews = reviewMapper.selectList(qw);
+        if (reviews == null || reviews.isEmpty()) {
+            return emptySummary(vo);
+        }
+
+        // 单周期、全公司不超过 200 人，明细规模有限，直接在内存聚合，避免复杂的多表 group by
+        Map<Long, Employee> employees = new LinkedHashMap<>();
+        List<Long> employeeIds = reviews.stream().map(PerformanceReview::getEmployeeId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (!employeeIds.isEmpty()) {
+            List<Employee> found = employeeMapper.selectBatchIds(employeeIds);
+            if (found != null) {
+                found.forEach(e -> employees.put(e.getId(), e));
+            }
+        }
+
+        Set<Long> departmentIds = new LinkedHashSet<>();
+        employees.values().stream().map(Employee::getDepartmentId).filter(Objects::nonNull)
+                .forEach(departmentIds::add);
+        Map<Long, Department> departments = new LinkedHashMap<>();
+        if (!departmentIds.isEmpty()) {
+            List<Department> found = departmentMapper.selectBatchIds(departmentIds);
+            if (found != null) {
+                found.forEach(d -> departments.put(d.getId(), d));
+            }
+        }
+
+        Set<Long> teamIds = reviews.stream().map(PerformanceReview::getProjectTeamId)
+                .filter(Objects::nonNull).distinct().collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, ProjectTeam> teams = new LinkedHashMap<>();
+        if (!teamIds.isEmpty()) {
+            List<ProjectTeam> found = teamMapper.selectBatchIds(teamIds);
+            if (found != null) {
+                found.forEach(t -> teams.put(t.getId(), t));
+            }
+        }
+
+        long[] bucketCounts = new long[5];
+        Map<Long, GroupAcc> byDepartment = new LinkedHashMap<>();
+        Map<Long, GroupAcc> byProject = new LinkedHashMap<>();
+        Set<Long> scoredEmployees = new LinkedHashSet<>();
+        BigDecimal sum = BigDecimal.ZERO;
+        BigDecimal min = null;
+        BigDecimal max = null;
+        int scored = 0;
+
+        for (PerformanceReview review : reviews) {
+            if (review.getEmployeeId() != null) {
+                scoredEmployees.add(review.getEmployeeId());
+            }
+            Employee employee = review.getEmployeeId() == null ? null : employees.get(review.getEmployeeId());
+            Long departmentId = employee == null ? null : employee.getDepartmentId();
+            String departmentName = departmentId == null ? "未设置部门"
+                    : (departments.get(departmentId) == null ? "未知部门" : departments.get(departmentId).getDepartmentName());
+            byDepartment.computeIfAbsent(departmentId, k -> new GroupAcc(departmentId, departmentName))
+                    .add(review.getEmployeeId(), review.getScore());
+
+            Long teamId = review.getProjectTeamId();
+            String teamName = teamId == null ? "未关联项目组"
+                    : (teams.get(teamId) == null ? "已删除项目组" : teams.get(teamId).getProjectName());
+            byProject.computeIfAbsent(teamId, k -> new GroupAcc(teamId, teamName))
+                    .add(review.getEmployeeId(), review.getScore());
+
+            BigDecimal score = review.getScore();
+            if (score == null) {
+                continue; // 未打分的记录只计入条数，不参与分数统计
+            }
+            scored++;
+            sum = sum.add(score);
+            min = min == null || score.compareTo(min) < 0 ? score : min;
+            max = max == null || score.compareTo(max) > 0 ? score : max;
+            bucketCounts[bucketIndex(score)]++;
+        }
+
+        vo.setReviewCount(reviews.size());
+        vo.setEmployeeCount(scoredEmployees.size());
+        vo.setMinScore(min);
+        vo.setMaxScore(max);
+        vo.setAverageScore(scored == 0 ? null : sum.divide(BigDecimal.valueOf(scored), 2, RoundingMode.HALF_UP));
+        vo.setScoreBuckets(List.of(
+                new PerformanceSummaryVO.BucketVO(BUCKET_LABELS[0], bucketCounts[0]),
+                new PerformanceSummaryVO.BucketVO(BUCKET_LABELS[1], bucketCounts[1]),
+                new PerformanceSummaryVO.BucketVO(BUCKET_LABELS[2], bucketCounts[2]),
+                new PerformanceSummaryVO.BucketVO(BUCKET_LABELS[3], bucketCounts[3]),
+                new PerformanceSummaryVO.BucketVO(BUCKET_LABELS[4], bucketCounts[4])));
+        vo.setDepartments(byDepartment.values().stream().map(GroupAcc::toVO).toList());
+        vo.setProjects(byProject.values().stream().map(GroupAcc::toVO).toList());
+        return vo;
+    }
+
+    private static final String[] BUCKET_LABELS = {"90-100", "80-89", "70-79", "60-69", "60 以下"};
+
+    private static int bucketIndex(BigDecimal score) {
+        if (score.compareTo(BigDecimal.valueOf(90)) >= 0) {
+            return 0;
+        }
+        if (score.compareTo(BigDecimal.valueOf(80)) >= 0) {
+            return 1;
+        }
+        if (score.compareTo(BigDecimal.valueOf(70)) >= 0) {
+            return 2;
+        }
+        if (score.compareTo(BigDecimal.valueOf(60)) >= 0) {
+            return 3;
+        }
+        return 4;
+    }
+
+    private PerformanceSummaryVO emptySummary(PerformanceSummaryVO vo) {
+        vo.setReviewCount(0);
+        vo.setEmployeeCount(0);
+        List<PerformanceSummaryVO.BucketVO> buckets = new ArrayList<>();
+        for (String label : BUCKET_LABELS) {
+            buckets.add(new PerformanceSummaryVO.BucketVO(label, 0));
+        }
+        vo.setScoreBuckets(buckets);
+        return vo;
+    }
+
+    /** 分组累加器：同时记录评价条数、去重后的人数和分数合计 */
+    private static final class GroupAcc {
+        private final Long id;
+        private final String name;
+        private final Set<Long> employees = new LinkedHashSet<>();
+        private long reviewCount;
+        private BigDecimal sum = BigDecimal.ZERO;
+        private int scored;
+
+        private GroupAcc(Long id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        private void add(Long employeeId, BigDecimal score) {
+            reviewCount++;
+            if (employeeId != null) {
+                employees.add(employeeId);
+            }
+            if (score != null) {
+                scored++;
+                sum = sum.add(score);
+            }
+        }
+
+        private PerformanceSummaryVO.GroupVO toVO() {
+            PerformanceSummaryVO.GroupVO g = new PerformanceSummaryVO.GroupVO();
+            g.setId(id);
+            g.setName(name);
+            g.setReviewCount(reviewCount);
+            g.setEmployeeCount(employees.size());
+            g.setAverageScore(scored == 0 ? null : sum.divide(BigDecimal.valueOf(scored), 2, RoundingMode.HALF_UP));
+            return g;
+        }
     }
 
     /** 周期锁定后不允许新增/修改/提交，避免汇总完成后记录又被改回去 */
