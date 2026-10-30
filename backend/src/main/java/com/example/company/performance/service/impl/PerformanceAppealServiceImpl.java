@@ -25,8 +25,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -92,7 +97,7 @@ public class PerformanceAppealServiceImpl implements PerformanceAppealService {
         }
         qw.orderByDesc("created_at");
         Page<PerformanceAppeal> result = appealMapper.selectPage(new Page<>(page, pageSize), qw);
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     @Override
@@ -105,7 +110,7 @@ public class PerformanceAppealServiceImpl implements PerformanceAppealService {
                 new QueryWrapper<PerformanceAppeal>()
                         .eq("employee_id", current.getEmployeeId())
                         .orderByDesc("created_at"));
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     @Override
@@ -177,7 +182,58 @@ public class PerformanceAppealServiceImpl implements PerformanceAppealService {
         return text;
     }
 
+    /** 批量组装：一次取回关联评价与所有涉及员工的姓名，避免逐条查询（列表页 N+1） */
+    private List<PerformanceAppealVO> toVOs(List<PerformanceAppeal> appeals) {
+        if (appeals.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> reviewIds = appeals.stream().map(PerformanceAppeal::getReviewId)
+                .filter(Objects::nonNull).collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        Map<Long, PerformanceReview> reviews = reviewIds.isEmpty() ? Map.of()
+                : reviewMapper.selectBatchIds(reviewIds).stream()
+                        .collect(Collectors.toMap(PerformanceReview::getId, Function.identity()));
+        Set<Long> employeeIds = new java.util.LinkedHashSet<>();
+        for (PerformanceAppeal appeal : appeals) {
+            if (appeal.getEmployeeId() != null) {
+                employeeIds.add(appeal.getEmployeeId());
+            }
+            if (appeal.getHandlerEmployeeId() != null) {
+                employeeIds.add(appeal.getHandlerEmployeeId());
+            }
+            PerformanceReview review = reviews.get(appeal.getReviewId());
+            if (review != null && review.getReviewerEmployeeId() != null) {
+                employeeIds.add(review.getReviewerEmployeeId());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        List<PerformanceAppealVO> list = new ArrayList<>(appeals.size());
+        for (PerformanceAppeal appeal : appeals) {
+            list.add(buildVO(appeal, reviews.get(appeal.getReviewId()), employees));
+        }
+        return list;
+    }
+
     private PerformanceAppealVO toVO(PerformanceAppeal appeal) {
+        PerformanceReview review = appeal.getReviewId() == null ? null : reviewMapper.selectById(appeal.getReviewId());
+        Set<Long> ids = new java.util.LinkedHashSet<>();
+        if (appeal.getEmployeeId() != null) {
+            ids.add(appeal.getEmployeeId());
+        }
+        if (appeal.getHandlerEmployeeId() != null) {
+            ids.add(appeal.getHandlerEmployeeId());
+        }
+        if (review != null && review.getReviewerEmployeeId() != null) {
+            ids.add(review.getReviewerEmployeeId());
+        }
+        Map<Long, Employee> employees = ids.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(ids).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        return buildVO(appeal, review, employees);
+    }
+
+    private PerformanceAppealVO buildVO(PerformanceAppeal appeal, PerformanceReview review, Map<Long, Employee> employees) {
         PerformanceAppealVO vo = new PerformanceAppealVO();
         vo.setId(appeal.getId());
         vo.setReviewId(appeal.getReviewId());
@@ -188,12 +244,11 @@ public class PerformanceAppealServiceImpl implements PerformanceAppealService {
         vo.setHandleComment(appeal.getHandleComment());
         vo.setHandledAt(appeal.getHandledAt());
         vo.setCreatedAt(appeal.getCreatedAt());
-        vo.setEmployeeName(employeeName(appeal.getEmployeeId()));
-        vo.setHandlerName(employeeName(appeal.getHandlerEmployeeId()));
-        PerformanceReview review = appeal.getReviewId() == null ? null : reviewMapper.selectById(appeal.getReviewId());
+        vo.setEmployeeName(nameOf(employees, appeal.getEmployeeId()));
+        vo.setHandlerName(nameOf(employees, appeal.getHandlerEmployeeId()));
         if (review != null) {
             vo.setReviewerEmployeeId(review.getReviewerEmployeeId());
-            vo.setReviewerName(employeeName(review.getReviewerEmployeeId()));
+            vo.setReviewerName(nameOf(employees, review.getReviewerEmployeeId()));
             vo.setPeriodType(review.getPeriodType());
             vo.setPeriodKey(review.getPeriodKey());
             vo.setScore(review.getScore());
@@ -201,11 +256,11 @@ public class PerformanceAppealServiceImpl implements PerformanceAppealService {
         return vo;
     }
 
-    private String employeeName(Long employeeId) {
+    private String nameOf(Map<Long, Employee> employees, Long employeeId) {
         if (employeeId == null) {
             return null;
         }
-        Employee employee = employeeMapper.selectById(employeeId);
+        Employee employee = employees.get(employeeId);
         return employee == null ? null : employee.getEmployeeName();
     }
 }

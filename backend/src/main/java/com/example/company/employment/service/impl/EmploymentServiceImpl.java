@@ -270,7 +270,7 @@ public class EmploymentServiceImpl implements EmploymentService {
         List<EmployeeEmploymentRecord> records = recordMapper.selectList(new QueryWrapper<EmployeeEmploymentRecord>()
                 .eq("employee_id", employeeId)
                 .orderByDesc("effective_date"));
-        return records.stream().map(this::toRecordVO).toList();
+        return toRecordVOs(records);
     }
 
     @Override
@@ -280,7 +280,7 @@ public class EmploymentServiceImpl implements EmploymentService {
                 new QueryWrapper<EmployeeChangeRequest>()
                         .eq("employee_id", employeeId)
                         .orderByDesc("created_at"));
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     // ==================== 内部规则 ====================
@@ -648,12 +648,47 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
     }
 
+    /** 批量组装：员工与提交/处理人姓名一次查回，避免逐行查询（列表页 N+1） */
+    private List<ChangeRequestVO> toVOs(List<EmployeeChangeRequest> requests) {
+        if (requests.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = new LinkedHashSet<>();
+        Set<Long> userIds = new LinkedHashSet<>();
+        for (EmployeeChangeRequest req : requests) {
+            if (req.getEmployeeId() != null) {
+                employeeIds.add(req.getEmployeeId());
+            }
+            if (req.getSubmittedBy() != null) {
+                userIds.add(req.getSubmittedBy());
+            }
+            if (req.getProcessedBy() != null) {
+                userIds.add(req.getProcessedBy());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, e -> e));
+        Map<Long, String> userNames = userIds.isEmpty() ? Map.of()
+                : userMapper.selectBatchIds(userIds).stream()
+                        .collect(Collectors.toMap(SysUser::getId, SysUser::getUsername));
+        List<ChangeRequestVO> list = new ArrayList<>(requests.size());
+        for (EmployeeChangeRequest req : requests) {
+            list.add(buildVO(req, employees.get(req.getEmployeeId()), userNames));
+        }
+        return list;
+    }
+
     private ChangeRequestVO toVO(EmployeeChangeRequest req) {
+        Employee employee = req.getEmployeeId() == null ? null : employeeMapper.selectById(req.getEmployeeId());
+        return buildVO(req, employee, null);
+    }
+
+    private ChangeRequestVO buildVO(EmployeeChangeRequest req, Employee employee, Map<Long, String> userNames) {
         ChangeRequestVO vo = new ChangeRequestVO();
         vo.setId(req.getId());
         vo.setRequestNo(req.getRequestNo());
         vo.setEmployeeId(req.getEmployeeId());
-        Employee employee = req.getEmployeeId() == null ? null : employeeMapper.selectById(req.getEmployeeId());
         if (employee != null) {
             vo.setEmployeeName(employee.getEmployeeName());
             vo.setEmployeeNo(employee.getEmployeeNo());
@@ -664,43 +699,88 @@ public class EmploymentServiceImpl implements EmploymentService {
         vo.setPayload(req.getPayload());
         vo.setReason(req.getReason());
         vo.setSubmittedBy(req.getSubmittedBy());
-        vo.setSubmittedByName(userName(req.getSubmittedBy()));
+        vo.setSubmittedByName(userName(userNames, req.getSubmittedBy()));
         vo.setProcessedBy(req.getProcessedBy());
-        vo.setProcessedByName(userName(req.getProcessedBy()));
+        vo.setProcessedByName(userName(userNames, req.getProcessedBy()));
         vo.setProcessedAt(req.getProcessedAt());
         vo.setProcessComment(req.getProcessComment());
         vo.setCreatedAt(req.getCreatedAt());
         return vo;
     }
 
-    private String userName(Long userId) {
+    /** userNames 为 null 表示单行场景，直接查库；列表场景传入批量的 Map */
+    private String userName(Map<Long, String> userNames, Long userId) {
         if (userId == null) {
             return null;
+        }
+        if (userNames != null) {
+            return userNames.get(userId);
         }
         SysUser user = userMapper.selectById(userId);
         return user == null ? null : user.getUsername();
     }
 
+    /** 批量组装任职记录：新旧部门与操作人姓名一次查回 */
+    private List<EmploymentRecordVO> toRecordVOs(List<EmployeeEmploymentRecord> records) {
+        if (records.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> deptIds = new LinkedHashSet<>();
+        Set<Long> userIds = new LinkedHashSet<>();
+        for (EmployeeEmploymentRecord r : records) {
+            if (r.getOldDepartmentId() != null) {
+                deptIds.add(r.getOldDepartmentId());
+            }
+            if (r.getNewDepartmentId() != null) {
+                deptIds.add(r.getNewDepartmentId());
+            }
+            if (r.getOperatorUserId() != null) {
+                userIds.add(r.getOperatorUserId());
+            }
+        }
+        Map<Long, Department> departments = deptIds.isEmpty() ? Map.of()
+                : departmentMapper.selectBatchIds(deptIds).stream()
+                        .collect(Collectors.toMap(Department::getId, d -> d));
+        Map<Long, String> userNames = userIds.isEmpty() ? Map.of()
+                : userMapper.selectBatchIds(userIds).stream()
+                        .collect(Collectors.toMap(SysUser::getId, SysUser::getUsername));
+        List<EmploymentRecordVO> list = new ArrayList<>(records.size());
+        for (EmployeeEmploymentRecord r : records) {
+            list.add(buildRecordVO(r, departments, userNames));
+        }
+        return list;
+    }
+
     private EmploymentRecordVO toRecordVO(EmployeeEmploymentRecord r) {
+        return buildRecordVO(r, null, null);
+    }
+
+    private EmploymentRecordVO buildRecordVO(EmployeeEmploymentRecord r, Map<Long, Department> departments,
+                                             Map<Long, String> userNames) {
         EmploymentRecordVO vo = new EmploymentRecordVO();
         vo.setId(r.getId());
         vo.setEmployeeId(r.getEmployeeId());
         vo.setChangeType(r.getChangeType());
         vo.setEffectiveDate(r.getEffectiveDate());
         vo.setOldDepartmentId(r.getOldDepartmentId());
-        vo.setOldDepartmentName(deptName(r.getOldDepartmentId()));
+        vo.setOldDepartmentName(deptName(departments, r.getOldDepartmentId()));
         vo.setNewDepartmentId(r.getNewDepartmentId());
-        vo.setNewDepartmentName(deptName(r.getNewDepartmentId()));
+        vo.setNewDepartmentName(deptName(departments, r.getNewDepartmentId()));
         vo.setOldPositionName(r.getOldPositionName());
         vo.setNewPositionName(r.getNewPositionName());
         vo.setReason(r.getReason());
-        vo.setOperatorName(userName(r.getOperatorUserId()));
+        vo.setOperatorName(userName(userNames, r.getOperatorUserId()));
         return vo;
     }
 
-    private String deptName(Long deptId) {
+    /** departments 为 null 表示单行场景，直接查库 */
+    private String deptName(Map<Long, Department> departments, Long deptId) {
         if (deptId == null) {
             return null;
+        }
+        if (departments != null) {
+            Department dept = departments.get(deptId);
+            return dept == null ? null : dept.getDepartmentName();
         }
         Department dept = departmentMapper.selectById(deptId);
         return dept == null ? null : dept.getDepartmentName();

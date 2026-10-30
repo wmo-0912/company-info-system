@@ -76,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（195 个单元/切片测试，不依赖数据库）
+# 后端测试（196 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -156,6 +156,8 @@ cd frontend; npm run type-check; npm run build
 26. **绩效汇总**：`GET /api/v1/performance-reviews/summary`（权限点 `performance:review`，按当前数据范围过滤）只统计已提交（`SUBMITTED`）的评价，可按 `periodType`/`periodKey` 过滤；返回评价条数、被评价人数、平均/最高/最低分、90-100/80-89/70-79/60-69/60 以下五档分布，以及按部门、按项目组的聚合（部门缺失归入「未设置部门」，未挂项目组的归入「未关联项目组」）。单周期明细规模有限（≤200 人），在内存聚合而非多表 group by，便于后续加维度。前端绩效页工具栏「汇总」按钮按当前筛选周期展示。没有评分的记录只计入条数，不参与平均分。
 
 27. **绩效申诉**：员工可对本人收到的已提交（`SUBMITTED`）评价提出申诉（`POST /api/v1/performance-reviews/{id}/appeal`），理由必填、≤500 字，同一评价同时只允许一条待处理申诉（重复提交返回 409）。人事/管理员在 `GET /api/v1/performance-appeals` 中按数据范围看到申诉，`POST /api/v1/performance-appeals/{id}/handle` 受理或驳回：受理只把评价置回 `RETURNED`（仍走「退回→评价人改稿→重提」的原路径，不直接改分），驳回必须填写处理意见；处理人不能是申诉人本人。申诉人可在 `GET /api/v1/performance-appeals/my` 查看本人申诉进度。表结构见 `database/schema.sql` 的 `performance_appeal`，存量库执行 `database/migrations/2026-10-30-performance-appeal.sql`。前端绩效页新增「我的申诉」与「申诉处理」两个页签。
+
+28. **列表批量组装（避免 N+1）**：分页/列表接口先收集本页关联的员工、部门、用户 id，用一次 `selectBatchIds` 查回 Map 再组装 VO——绩效列表（员工/评价人/项目组）、绩效申诉（评价/申诉人/处理人/评价人）、项目组列表（负责人姓名与在职成员数）、项目组成员（员工与部门）、任职记录（新旧部门与操作人）、用户列表（员工姓名与角色）。单条详情/新建/更新仍走单行查询，不在本批范围。
 
 ## 常见问题
 

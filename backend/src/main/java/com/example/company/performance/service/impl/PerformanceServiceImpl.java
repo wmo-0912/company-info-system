@@ -42,6 +42,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -74,7 +76,7 @@ public class PerformanceServiceImpl implements PerformanceService {
         }
         qw.orderByDesc("created_at");
         Page<PerformanceReview> result = reviewMapper.selectPage(new Page<>(page, pageSize), qw);
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     /**
@@ -245,7 +247,7 @@ public class PerformanceServiceImpl implements PerformanceService {
                         .eq("employee_id", current.getEmployeeId())
                         .in("status", ReviewStatus.SUBMITTED.name(), ReviewStatus.RETURNED.name())
                         .orderByDesc("created_at"));
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
 
@@ -486,7 +488,47 @@ public class PerformanceServiceImpl implements PerformanceService {
         return review;
     }
 
+    /** 批量组装：先收集员工/项目组 id 一次性查回，避免逐条 selectById（列表页 N+1） */
+    private List<PerformanceReviewVO> toVOs(List<PerformanceReview> reviews) {
+        if (reviews.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = new java.util.LinkedHashSet<>();
+        Set<Long> teamIds = new java.util.LinkedHashSet<>();
+        for (PerformanceReview r : reviews) {
+            if (r.getEmployeeId() != null) {
+                employeeIds.add(r.getEmployeeId());
+            }
+            if (r.getReviewerEmployeeId() != null) {
+                employeeIds.add(r.getReviewerEmployeeId());
+            }
+            if (r.getProjectTeamId() != null) {
+                teamIds.add(r.getProjectTeamId());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Map<Long, ProjectTeam> teams = teamIds.isEmpty() ? Map.of()
+                : teamMapper.selectBatchIds(teamIds).stream()
+                        .collect(Collectors.toMap(ProjectTeam::getId, Function.identity()));
+        List<PerformanceReviewVO> list = new ArrayList<>(reviews.size());
+        for (PerformanceReview r : reviews) {
+            list.add(buildVO(r, employees.get(r.getEmployeeId()),
+                    employees.get(r.getReviewerEmployeeId()),
+                    r.getProjectTeamId() == null ? null : teams.get(r.getProjectTeamId())));
+        }
+        return list;
+    }
+
     private PerformanceReviewVO toVO(PerformanceReview r) {
+        Employee emp = r.getEmployeeId() == null ? null : employeeMapper.selectById(r.getEmployeeId());
+        Employee reviewer = r.getReviewerEmployeeId() == null ? null : employeeMapper.selectById(r.getReviewerEmployeeId());
+        ProjectTeam team = r.getProjectTeamId() == null ? null : teamMapper.selectById(r.getProjectTeamId());
+        return buildVO(r, emp, reviewer, team);
+    }
+
+    private PerformanceReviewVO buildVO(PerformanceReview r, Employee emp, Employee reviewer, ProjectTeam team) {
         PerformanceReviewVO vo = new PerformanceReviewVO();
         vo.setId(r.getId());
         vo.setEmployeeId(r.getEmployeeId());
@@ -500,17 +542,12 @@ public class PerformanceServiceImpl implements PerformanceService {
         vo.setStatus(r.getStatus());
         vo.setSubmittedAt(r.getSubmittedAt());
         vo.setCreatedAt(r.getCreatedAt());
-        Employee emp = employeeMapper.selectById(r.getEmployeeId());
         if (emp != null) {
             vo.setEmployeeName(emp.getEmployeeName());
             vo.setEmployeeNo(emp.getEmployeeNo());
         }
-        Employee reviewer = employeeMapper.selectById(r.getReviewerEmployeeId());
         vo.setReviewerName(reviewer == null ? null : reviewer.getEmployeeName());
-        if (r.getProjectTeamId() != null) {
-            ProjectTeam team = teamMapper.selectById(r.getProjectTeamId());
-            vo.setProjectTeamName(team == null ? null : team.getProjectName());
-        }
+        vo.setProjectTeamName(team == null ? null : team.getProjectName());
         return vo;
     }
 }

@@ -133,7 +133,7 @@ class ProjectAccessTest {
         employee.setId(11L);
         employee.setEmployeeNo("E11");
         employee.setEmployeeName("李工");
-        when(employeeMapper.selectById(11L)).thenReturn(employee);
+        when(employeeMapper.selectBatchIds(any())).thenReturn(List.of(employee));
 
         List<ProjectMemberVO> members = service.members(100L);
         assertEquals(1, members.size());

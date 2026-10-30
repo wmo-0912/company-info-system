@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -117,7 +118,7 @@ class PerformanceAppealServiceTest {
             a.setId(100L);
             return 1;
         });
-        when(employeeMapper.selectById(5L)).thenReturn(employee(5L, "张三"));
+        when(employeeMapper.selectBatchIds(any())).thenReturn(List.of(employee(5L, "张三")));
 
         PerformanceAppealVO vo = service.create(10L, "  评分明显偏低  ");
 
@@ -137,8 +138,8 @@ class PerformanceAppealServiceTest {
         when(appealMapper.selectById(7L)).thenReturn(appeal);
         PerformanceReview review = review(5L, "SUBMITTED");
         when(reviewMapper.selectById(10L)).thenReturn(review);
-        when(employeeMapper.selectById(5L)).thenReturn(employee(5L, "张三"));
-        when(employeeMapper.selectById(9L)).thenReturn(employee(9L, "李四"));
+        when(employeeMapper.selectBatchIds(any()))
+                .thenReturn(List.of(employee(5L, "张三"), employee(9L, "李四")));
 
         PerformanceAppealVO vo = service.handle(7L, "ACCEPT", "已核实，退回重新评分");
 
@@ -182,6 +183,29 @@ class PerformanceAppealServiceTest {
         assertTrue(res.getRecords().isEmpty());
         assertEquals(0, res.getTotal());
         verify(appealMapper, never()).selectPage(any(), any());
+    }
+
+    @Test
+    @DisplayName("申诉分页一次批量取回评价与姓名，不逐行查询")
+    void pageBatchLoadsRelatedRows() {
+        when(dataScopeService.visibleEmployeeIds(any(), any())).thenReturn(Set.of(5L, 6L));
+        Page<PerformanceAppeal> page = new Page<>(1, 10);
+        page.setRecords(List.of(appeal(7L, 10L, 5L, "PENDING"), appeal(8L, 10L, 6L, "ACCEPTED")));
+        page.setTotal(2);
+        when(appealMapper.selectPage(any(), any())).thenReturn(page);
+        when(reviewMapper.selectBatchIds(any())).thenReturn(List.of(review(5L, "SUBMITTED")));
+        when(employeeMapper.selectBatchIds(any())).thenReturn(List.of(
+                employee(5L, "张三"), employee(6L, "王五"), employee(9L, "李四")));
+
+        var res = service.page(1, 10, null);
+
+        assertEquals(2, res.getRecords().size());
+        assertEquals("张三", res.getRecords().get(0).getEmployeeName());
+        assertEquals("李四", res.getRecords().get(0).getReviewerName());
+        assertEquals("王五", res.getRecords().get(1).getEmployeeName());
+        verify(reviewMapper, times(1)).selectBatchIds(any());
+        verify(employeeMapper, times(1)).selectBatchIds(any());
+        verify(employeeMapper, never()).selectById(any());
     }
 
     private PerformanceReview review(Long employeeId, String status) {

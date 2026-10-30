@@ -30,8 +30,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -81,7 +85,7 @@ public class ProjectServiceImpl implements ProjectService {
         }
         qw.orderByAsc("project_code");
         Page<ProjectTeam> result = teamMapper.selectPage(new Page<>(page, pageSize), qw);
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     @Override
@@ -147,7 +151,7 @@ public class ProjectServiceImpl implements ProjectService {
         assertVisible(team);
         List<ProjectTeamMember> members = memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
                 .eq("project_team_id", id).orderByAsc("joined_at"));
-        return members.stream().map(this::toMemberVO).toList();
+        return toMemberVOs(members);
     }
 
     @Override
@@ -212,7 +216,7 @@ public class ProjectServiceImpl implements ProjectService {
         Map<Long, ProjectTeam> all = new java.util.LinkedHashMap<>();
         managed.forEach(t -> all.put(t.getId(), t));
         joined.forEach(t -> all.put(t.getId(), t));
-        return all.values().stream().map(this::toVO).toList();
+        return toVOs(new ArrayList<>(all.values()));
     }
 
     /** 读操作校验：项目组必须在当前用户数据范围内，避免按 ID 直查越权 */
@@ -260,31 +264,93 @@ public class ProjectServiceImpl implements ProjectService {
         }
     }
 
+    /** 批量组装：负责人姓名与在职成员数一次查回，避免每行两次查询（列表页 N+1） */
+    private List<ProjectVO> toVOs(List<ProjectTeam> teams) {
+        if (teams.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> managerIds = teams.stream().map(ProjectTeam::getManagerEmployeeId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Employee> managers = managerIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(managerIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        List<Long> teamIds = teams.stream().map(ProjectTeam::getId).toList();
+        Map<Long, Integer> counts = new LinkedHashMap<>();
+        if (!teamIds.isEmpty()) {
+            memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
+                            .in("project_team_id", teamIds).isNull("left_at"))
+                    .forEach(m -> counts.merge(m.getProjectTeamId(), 1, Integer::sum));
+        }
+        List<ProjectVO> list = new ArrayList<>(teams.size());
+        for (ProjectTeam team : teams) {
+            list.add(buildVO(team, managers.get(team.getManagerEmployeeId()),
+                    counts.getOrDefault(team.getId(), 0)));
+        }
+        return list;
+    }
+
+    /** 批量组装成员：员工与部门各一次查回 */
+    private List<ProjectMemberVO> toMemberVOs(List<ProjectTeamMember> members) {
+        if (members.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = members.stream().map(ProjectTeamMember::getEmployeeId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Set<Long> deptIds = employees.values().stream().map(Employee::getDepartmentId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Department> departments = deptIds.isEmpty() ? Map.of()
+                : departmentMapper.selectBatchIds(deptIds).stream()
+                        .collect(Collectors.toMap(Department::getId, Function.identity()));
+        List<ProjectMemberVO> list = new ArrayList<>(members.size());
+        for (ProjectTeamMember member : members) {
+            Employee employee = employees.get(member.getEmployeeId());
+            Department dept = employee == null || employee.getDepartmentId() == null
+                    ? null : departments.get(employee.getDepartmentId());
+            list.add(buildMemberVO(member, employee, dept));
+        }
+        return list;
+    }
+
     private ProjectVO toVO(ProjectTeam team) {
+        Employee manager = team.getManagerEmployeeId() == null ? null
+                : employeeMapper.selectById(team.getManagerEmployeeId());
+        int memberCount = Math.toIntExact(memberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
+                .eq("project_team_id", team.getId()).isNull("left_at")));
+        return buildVO(team, manager, memberCount);
+    }
+
+    private ProjectVO buildVO(ProjectTeam team, Employee manager, int memberCount) {
         ProjectVO vo = new ProjectVO();
         vo.setId(team.getId());
         vo.setProjectCode(team.getProjectCode());
         vo.setProjectName(team.getProjectName());
         vo.setManagerEmployeeId(team.getManagerEmployeeId());
-        Employee manager = employeeMapper.selectById(team.getManagerEmployeeId());
         vo.setManagerEmployeeName(manager == null ? null : manager.getEmployeeName());
         vo.setDescription(team.getDescription());
         vo.setStatus(team.getStatus());
-        vo.setMemberCount(Math.toIntExact(memberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
-                .eq("project_team_id", team.getId()).isNull("left_at"))));
+        vo.setMemberCount(memberCount);
         return vo;
     }
 
     private ProjectMemberVO toMemberVO(ProjectTeamMember member) {
+        Employee employee = member.getEmployeeId() == null ? null
+                : employeeMapper.selectById(member.getEmployeeId());
+        Department dept = employee == null || employee.getDepartmentId() == null ? null
+                : departmentMapper.selectById(employee.getDepartmentId());
+        return buildMemberVO(member, employee, dept);
+    }
+
+    private ProjectMemberVO buildMemberVO(ProjectTeamMember member, Employee employee, Department dept) {
         ProjectMemberVO vo = new ProjectMemberVO();
         vo.setId(member.getId());
         vo.setProjectTeamId(member.getProjectTeamId());
         vo.setEmployeeId(member.getEmployeeId());
-        Employee employee = employeeMapper.selectById(member.getEmployeeId());
         if (employee != null) {
             vo.setEmployeeNo(employee.getEmployeeNo());
             vo.setEmployeeName(employee.getEmployeeName());
-            Department dept = departmentMapper.selectById(employee.getDepartmentId());
             vo.setDepartmentName(dept == null ? null : dept.getDepartmentName());
         }
         vo.setMemberRole(member.getMemberRole());

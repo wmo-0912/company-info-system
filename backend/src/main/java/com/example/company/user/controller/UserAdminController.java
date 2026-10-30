@@ -35,8 +35,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Tag(name = "用户管理")
@@ -71,7 +75,7 @@ public class UserAdminController {
         }
         qw.orderByAsc("id");
         Page<SysUser> result = userMapper.selectPage(new Page<>(page, pageSize), qw);
-        return ApiResponse.ok(PageResponse.from(result, this::toVO));
+        return ApiResponse.ok(PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal()));
     }
 
     @Operation(summary = "用户详情")
@@ -204,18 +208,55 @@ public class UserAdminController {
         return user;
     }
 
+    /** 批量组装：员工姓名与角色一次查回，避免每行两次查询（列表页 N+1） */
+    private List<UserVO> toVOs(List<SysUser> users) {
+        if (users.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = new LinkedHashSet<>();
+        List<Long> userIds = new ArrayList<>(users.size());
+        for (SysUser user : users) {
+            userIds.add(user.getId());
+            if (user.getEmployeeId() != null) {
+                employeeIds.add(user.getEmployeeId());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, e -> e));
+        // 一次取回本页用户的全部「用户-角色」关联，再一次性取回角色定义
+        List<SysUserRole> links = userRoleMapper.selectList(new QueryWrapper<SysUserRole>().in("user_id", userIds));
+        Map<Long, List<Long>> roleIdsByUser = new LinkedHashMap<>();
+        Set<Long> roleIds = new LinkedHashSet<>();
+        for (SysUserRole link : links) {
+            roleIdsByUser.computeIfAbsent(link.getUserId(), k -> new ArrayList<>()).add(link.getRoleId());
+            roleIds.add(link.getRoleId());
+        }
+        Map<Long, SysRole> roles = roleIds.isEmpty() ? Map.of()
+                : roleMapper.selectBatchIds(roleIds).stream()
+                        .collect(Collectors.toMap(SysRole::getId, r -> r));
+        List<UserVO> list = new ArrayList<>(users.size());
+        for (SysUser user : users) {
+            List<SysRole> userRoles = roleIdsByUser.getOrDefault(user.getId(), List.of()).stream()
+                    .map(roles::get).filter(java.util.Objects::nonNull).toList();
+            list.add(buildVO(user, employees.get(user.getEmployeeId()), userRoles));
+        }
+        return list;
+    }
+
     private UserVO toVO(SysUser user) {
+        Employee employee = user.getEmployeeId() == null ? null : employeeMapper.selectById(user.getEmployeeId());
+        return buildVO(user, employee, roleMapper.selectByUserId(user.getId()));
+    }
+
+    private UserVO buildVO(SysUser user, Employee employee, List<SysRole> roles) {
         UserVO vo = new UserVO();
         vo.setId(user.getId());
         vo.setUsername(user.getUsername());
         vo.setEmployeeId(user.getEmployeeId());
-        if (user.getEmployeeId() != null) {
-            Employee employee = employeeMapper.selectById(user.getEmployeeId());
-            vo.setEmployeeName(employee == null ? null : employee.getEmployeeName());
-        }
+        vo.setEmployeeName(employee == null ? null : employee.getEmployeeName());
         vo.setStatus(user.getStatus());
         vo.setLastLoginAt(user.getLastLoginAt());
-        List<SysRole> roles = roleMapper.selectByUserId(user.getId());
         vo.setRoles(roles.stream().map(SysRole::getRoleCode).collect(Collectors.toList()));
         vo.setRoleIds(roles.stream().map(SysRole::getId).collect(Collectors.toList()));
         return vo;
