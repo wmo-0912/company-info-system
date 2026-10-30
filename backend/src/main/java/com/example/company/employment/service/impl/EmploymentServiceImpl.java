@@ -1,6 +1,7 @@
 package com.example.company.employment.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
@@ -24,6 +25,8 @@ import com.example.company.employment.mapper.EmployeeEmploymentRecordMapper;
 import com.example.company.employment.service.EmploymentService;
 import com.example.company.employment.vo.ChangeRequestVO;
 import com.example.company.employment.vo.EmploymentRecordVO;
+import com.example.company.project.entity.ProjectTeamMember;
+import com.example.company.project.mapper.ProjectTeamMemberMapper;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -45,6 +49,7 @@ public class EmploymentServiceImpl implements EmploymentService {
     private final EmployeeEmploymentRecordMapper recordMapper;
     private final EmployeeMapper employeeMapper;
     private final DepartmentMapper departmentMapper;
+    private final ProjectTeamMemberMapper projectMemberMapper;
     private final SysUserMapper userMapper;
     private final DataScopeService dataScopeService;
     private final AuditService auditService;
@@ -153,6 +158,9 @@ public class EmploymentServiceImpl implements EmploymentService {
         Employee employee = requireEmployee(req.getEmployeeId());
         applyApproval(req, employee);
         employeeMapper.updateById(employee);
+        String resignDetail = ChangeType.RESIGN.name().equals(req.getChangeType())
+                ? cascadeResignation(employee, req.getEffectiveDate())
+                : null;
 
         EmployeeEmploymentRecord record = new EmployeeEmploymentRecord();
         record.setEmployeeId(employee.getId());
@@ -165,7 +173,8 @@ public class EmploymentServiceImpl implements EmploymentService {
 
         req.setStatus(RequestStatus.APPROVED.name());
         requestMapper.updateById(req);
-        auditService.success("employment:approve", "change_request", id, "批准申请 " + req.getRequestNo());
+        auditService.success("employment:approve", "change_request", id,
+                "批准申请 " + req.getRequestNo() + (resignDetail == null ? "" : "；" + resignDetail));
         return toVO(req);
     }
 
@@ -287,6 +296,31 @@ public class EmploymentServiceImpl implements EmploymentService {
             }
         }
         req.getPayload().put("snapshot", snapshot);
+    }
+
+    /**
+     * 离职批准后的级联收尾（与主档更新同一事务）：
+     * 1. 停用该员工关联的登录账号——JWT 过滤器每次请求都会重新加载账号状态，停用后旧 token 立即失效；
+     * 2. 结束进行中的项目组成员关系（写 left_at），避免数据范围仍把离职者算作有效成员；
+     * 3. 清空指向该员工的部门负责人引用，避免"幽灵负责人"。
+     *
+     * @return 供审计记录使用的摘要
+     */
+    private String cascadeResignation(Employee employee, LocalDate effectiveDate) {
+        LocalDate leftAt = effectiveDate == null ? LocalDate.now() : effectiveDate;
+        int disabledUsers = userMapper.update(null, new UpdateWrapper<SysUser>()
+                .set("status", "DISABLED")
+                .eq("employee_id", employee.getId())
+                .eq("status", "ACTIVE"));
+        int closedMemberships = projectMemberMapper.update(null, new UpdateWrapper<ProjectTeamMember>()
+                .set("left_at", leftAt)
+                .eq("employee_id", employee.getId())
+                .isNull("left_at"));
+        int clearedManagers = departmentMapper.update(null, new UpdateWrapper<Department>()
+                .setSql("manager_employee_id = NULL")
+                .eq("manager_employee_id", employee.getId()));
+        return "停用账号 " + disabledUsers + " 个、结束项目组成员关系 " + closedMemberships
+                + " 个、清理部门负责人 " + clearedManagers + " 处";
     }
 
     private ChangeRequestCreateDTO toDTO(EmployeeChangeRequest req) {

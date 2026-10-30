@@ -1,6 +1,8 @@
 package com.example.company.employment;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
@@ -16,11 +18,15 @@ import com.example.company.employment.entity.EmployeeEmploymentRecord;
 import com.example.company.employment.mapper.EmployeeChangeRequestMapper;
 import com.example.company.employment.mapper.EmployeeEmploymentRecordMapper;
 import com.example.company.employment.service.impl.EmploymentServiceImpl;
+import com.example.company.project.entity.ProjectTeamMember;
+import com.example.company.project.mapper.ProjectTeamMemberMapper;
+import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -37,6 +43,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,6 +57,8 @@ class EmploymentServiceImplTest {
     private EmployeeMapper employeeMapper;
     @Mock
     private DepartmentMapper departmentMapper;
+    @Mock
+    private ProjectTeamMemberMapper projectMemberMapper;
     @Mock
     private SysUserMapper userMapper;
     @Mock
@@ -203,6 +212,35 @@ class EmploymentServiceImplTest {
         service.process(100L, dto);
         assertEquals(EmployeeStatus.RESIGNED.name(), e.getEmploymentStatus());
         assertEquals(req.getEffectiveDate(), e.getResignationDate());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void resignCascadesAccountMembershipAndManager() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        service.process(100L, dto);
+
+        ArgumentCaptor<Wrapper<SysUser>> userCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(userMapper).update(isNull(), userCaptor.capture());
+        UpdateWrapper<SysUser> userUpdate = (UpdateWrapper<SysUser>) userCaptor.getValue();
+        assertTrue(userUpdate.getSqlSet().contains("status"), userUpdate.getSqlSet());
+        assertTrue(userUpdate.getParamNameValuePairs().containsValue("DISABLED"));
+
+        ArgumentCaptor<Wrapper<ProjectTeamMember>> memberCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(projectMemberMapper).update(isNull(), memberCaptor.capture());
+        UpdateWrapper<ProjectTeamMember> memberUpdate = (UpdateWrapper<ProjectTeamMember>) memberCaptor.getValue();
+        assertTrue(memberUpdate.getSqlSet().contains("left_at"), memberUpdate.getSqlSet());
+        assertTrue(memberUpdate.getParamNameValuePairs().containsValue(req.getEffectiveDate()));
+
+        ArgumentCaptor<Wrapper<Department>> deptCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(departmentMapper).update(isNull(), deptCaptor.capture());
+        assertTrue(((UpdateWrapper<Department>) deptCaptor.getValue()).getSqlSet().contains("manager_employee_id"));
     }
 
     @Test
