@@ -109,8 +109,8 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { assignUserRoles, changeUserStatus, createUser, pageUsers, resetUserPassword } from '@/api/user'
 import { listRoles } from '@/api/role'
-import { pageEmployees } from '@/api/employee'
-import type { EmployeeListItem, RoleVO, UserVO } from '@/api/types'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
+import type { RoleVO, UserVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -148,7 +148,7 @@ const createRules: FormRules = {
 }
 
 const roleOptions = ref<RoleVO[]>([])
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 const currentUser = ref<UserVO | null>(null)
 const selectedRoleIds = ref<number[]>([])
 
@@ -201,9 +201,8 @@ async function ensureOptions() {
   if (!roleOptions.value.length && auth.has('role:read')) {
     roleOptions.value = await listRoles()
   }
-  if (!employeeOptions.value.length && auth.has('employee:read')) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
+  if (auth.has('employee:read')) {
+    await loadEmployeeOptions()
   }
 }
 

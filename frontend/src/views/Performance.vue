@@ -133,8 +133,8 @@ import {
   submitReview,
   updateReview
 } from '@/api/performance'
-import { pageEmployees } from '@/api/employee'
-import type { EmployeeListItem, PerformanceReviewVO } from '@/api/types'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
+import type { PerformanceReviewVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -181,7 +181,7 @@ const formRules: FormRules = {
   ]
 }
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 
 async function load() {
   loading.value = true
@@ -228,10 +228,7 @@ watch(tab, (t) => {
 
 async function openDialog(row?: PerformanceReviewVO) {
   editing.value = row || null
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
   if (row) {
     Object.assign(form, {
       employeeId: row.employeeId,

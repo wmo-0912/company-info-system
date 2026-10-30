@@ -103,8 +103,8 @@ import {
   removeProjectMember,
   updateProject
 } from '@/api/project'
-import { pageEmployees } from '@/api/employee'
-import type { EmployeeListItem, ProjectMemberVO, ProjectVO } from '@/api/types'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
+import type { ProjectMemberVO, ProjectVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -143,13 +143,10 @@ const memberLoading = ref(false)
 const newMemberId = ref<number | null>(null)
 const newMemberRole = ref('')
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 
 async function ensureEmployeeOptions() {
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
 }
 
 async function load() {

@@ -115,9 +115,9 @@ import {
   processChangeRequest,
   submitChangeRequest
 } from '@/api/employment'
-import { pageEmployees } from '@/api/employee'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import { fetchDepartmentTree } from '@/api/department'
-import type { ChangeRequestVO, DepartmentVO, EmployeeListItem } from '@/api/types'
+import type { ChangeRequestVO, DepartmentVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -166,7 +166,7 @@ const futureEffective = computed(() => {
 })
 const approveBlocked = computed(() => processForm.decision === 'APPROVE' && futureEffective.value)
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 const deptTree = ref<DepartmentVO[]>([])
 
 async function load() {
@@ -191,10 +191,7 @@ function reload() {
 }
 
 async function openCreate() {
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
   if (!deptTree.value.length && auth.has('department:read')) {
     deptTree.value = await fetchDepartmentTree()
   }

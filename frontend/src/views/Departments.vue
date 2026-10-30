@@ -98,7 +98,7 @@ import {
   fetchDepartmentTree,
   updateDepartment
 } from '@/api/department'
-import { pageEmployees } from '@/api/employee'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import type { DepartmentVO, EmployeeListItem } from '@/api/types'
 import { dictLabel, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
@@ -133,7 +133,7 @@ const formRules: FormRules = {
   departmentCode: [{ required: true, message: '请输入部门编码', trigger: 'blur' }]
 }
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 
 const parentOptions = computed(() => {
   const filter = (nodes: DepartmentVO[]): DepartmentVO[] =>
@@ -182,10 +182,7 @@ function onEmpPage(p: number) {
 
 async function openDialog(dept?: DepartmentVO) {
   editing.value = dept || null
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
   if (dept) {
     form.departmentName = dept.departmentName
     form.departmentCode = dept.departmentCode

@@ -17,7 +17,7 @@
 ├─ backend/          # Spring Boot 后端（Maven Wrapper）
 ├─ frontend/         # Vue 3 前端
 ├─ database/         # schema.sql 建表脚本
-└─ docs/             # 实施设计说明书、部署文档
+└─ docs/             # 实施设计说明书、部署文档（含 Nginx 示例、测试账号、阿里云上线指南）
 ```
 
 ## 环境要求
