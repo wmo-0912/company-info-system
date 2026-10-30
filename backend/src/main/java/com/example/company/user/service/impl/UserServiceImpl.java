@@ -5,6 +5,7 @@ import com.example.company.audit.service.AuditService;
 import com.example.company.common.enums.DataScopeType;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.LoginUser;
+import com.example.company.common.security.PasswordPolicy;
 import com.example.company.config.JwtTokenProvider;
 import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
@@ -21,6 +22,8 @@ import com.example.company.user.vo.LoginResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -77,6 +80,7 @@ public class UserServiceImpl implements UserService {
             }
         }
         loginUser.setDisplayName(displayName);
+        loginUser.setMustChangePassword(Boolean.TRUE.equals(user.getMustChangePassword()));
         return loginUser;
     }
 
@@ -145,6 +149,53 @@ public class UserServiceImpl implements UserService {
         vo.setRoles(loginUser.getRoles());
         vo.setPermissions(loginUser.getPermissions());
         vo.setDataScope(loginUser.getDataScope());
+        vo.setMustChangePassword(loginUser.isMustChangePassword());
         return vo;
+    }
+
+    @Override
+    @Transactional
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        SysUser user = userMapper.selectById(userId);
+        if (user == null) {
+            throw BusinessException.unauthorized("用户不存在");
+        }
+        if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
+            auditService.recordForActor(user.getId(), user.getUsername(), "auth:change-password", "user", userId, false,
+                    "修改密码失败：原密码不正确");
+            throw BusinessException.badRequest("原密码不正确");
+        }
+        PasswordPolicy.validate(newPassword);
+        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+            throw BusinessException.badRequest("新密码不能与原密码相同");
+        }
+        // 只更新密码相关列：避免把整实体（含 lastLoginAt 等）回写造成并发覆盖
+        SysUser patch = new SysUser();
+        patch.setId(userId);
+        patch.setPasswordHash(passwordEncoder.encode(newPassword));
+        patch.setMustChangePassword(false);
+        userMapper.updateById(patch);
+        auditService.success("auth:change-password", "user", userId, "本人修改登录密码");
+    }
+
+    @Override
+    @Transactional
+    public String resetPassword(Long userId, String newPassword) {
+        SysUser user = userMapper.selectById(userId);
+        if (user == null) {
+            throw BusinessException.notFound("用户不存在");
+        }
+        String effective = StringUtils.hasText(newPassword) ? newPassword : PasswordPolicy.generate();
+        PasswordPolicy.validate(effective);
+        SysUser patch = new SysUser();
+        patch.setId(userId);
+        patch.setPasswordHash(passwordEncoder.encode(effective));
+        patch.setMustChangePassword(true);
+        patch.setFailedLoginCount(0);
+        userMapper.updateById(patch);
+        // 审计只记动作，绝不记录明文密码
+        auditService.success("user:reset-password", "user", userId,
+                "管理员重置密码" + (StringUtils.hasText(newPassword) ? "（指定新密码）" : "（系统生成随机密码）"));
+        return effective;
     }
 }

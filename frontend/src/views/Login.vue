@@ -42,6 +42,11 @@ async function onSubmit() {
   loading.value = true
   try {
     await auth.login(form.username, form.password)
+    if (auth.user?.mustChangePassword) {
+      ElMessage.warning('首次登录或密码已被重置，请先修改密码')
+      router.push('/profile')
+      return
+    }
     ElMessage.success('登录成功')
     const redirect = (route.query.redirect as string) || '/'
     router.push(redirect)

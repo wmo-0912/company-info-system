@@ -29,6 +29,9 @@ public class LoginUser {
     /** 最强数据范围（多角色取并集时取范围最大者） */
     private String dataScope;
 
+    /** 是否需要强制修改密码（首登/管理员重置后） */
+    private boolean mustChangePassword;
+
     public boolean hasPermission(String permission) {
         return permissions != null && permissions.contains(permission);
     }

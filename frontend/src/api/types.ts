@@ -20,6 +20,8 @@ export interface CurrentUser {
   roles: string[]
   permissions: string[]
   dataScope: string
+  /** 首登或管理员重置密码后为 true，需先修改密码 */
+  mustChangePassword: boolean
 }
 
 export interface LoginResponse {

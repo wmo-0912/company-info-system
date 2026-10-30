@@ -38,3 +38,15 @@ export function changeUserStatus(id: number, status: string) {
 export function assignUserRoles(id: number, roleIds: number[]) {
   return apiPut<UserVO>(`/users/${id}/roles`, { roleIds })
 }
+
+export interface ResetPasswordResult {
+  username: string
+  initialPassword: string
+}
+
+/** 重置密码：不传 newPassword 时后端生成一次性随机密码，仅在返回值中出现一次 */
+export function resetUserPassword(id: number, newPassword?: string) {
+  return apiPost<ResetPasswordResult>(`/users/${id}/reset-password`, {
+    newPassword: newPassword || null
+  })
+}

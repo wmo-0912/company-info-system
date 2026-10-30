@@ -12,9 +12,12 @@ import com.example.company.role.entity.SysRole;
 import com.example.company.role.entity.SysUserRole;
 import com.example.company.role.mapper.SysRoleMapper;
 import com.example.company.role.mapper.SysUserRoleMapper;
+import com.example.company.user.dto.ResetPasswordRequest;
 import com.example.company.user.dto.UserCreateRequest;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.UserService;
+import com.example.company.user.vo.ResetPasswordVO;
 import com.example.company.user.vo.UserVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,6 +50,7 @@ public class UserAdminController {
     private final EmployeeMapper employeeMapper;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
+    private final UserService userService;
 
     @Operation(summary = "用户分页列表")
     @GetMapping
@@ -91,6 +95,8 @@ public class UserAdminController {
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setEmployeeId(request.getEmployeeId());
         user.setStatus("ACTIVE");
+        // 初始密码由管理员线下交付，首次登录必须自行修改
+        user.setMustChangePassword(true);
         userMapper.insert(user);
         saveUserRoles(user.getId(), roles.stream().map(SysRole::getId).toList());
         auditService.success("user:create", "user", user.getId(), "创建用户 " + user.getUsername());
@@ -127,6 +133,16 @@ public class UserAdminController {
         userMapper.updateById(user);
         auditService.success("user:status", "user", id, "用户状态调整为 " + body.getStatus());
         return ApiResponse.ok();
+    }
+
+    @Operation(summary = "重置用户密码（不传新密码则生成一次性随机密码，仅响应返回一次）")
+    @PostMapping("/{id}/reset-password")
+    @PreAuthorize("hasAuthority('user:disable')")
+    public ApiResponse<ResetPasswordVO> resetPassword(@PathVariable Long id,
+                                                     @RequestBody(required = false) @Valid ResetPasswordRequest request) {
+        String newPassword = userService.resetPassword(id, request == null ? null : request.getNewPassword());
+        String username = requireUser(id).getUsername();
+        return ApiResponse.ok(new ResetPasswordVO(username, newPassword));
     }
 
     @Operation(summary = "分配角色")

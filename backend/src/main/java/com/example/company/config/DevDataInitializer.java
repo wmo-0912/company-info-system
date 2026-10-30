@@ -403,6 +403,8 @@ public class DevDataInitializer implements CommandLineRunner {
         user.setPasswordHash(passwordEncoder.encode(rawPassword));
         user.setEmployeeId(employeeId);
         user.setStatus("ACTIVE");
+        // 演示账号密码写在 README 中，不强制改密，否则本地联调无法继续
+        user.setMustChangePassword(false);
         userMapper.insert(user);
         SysUserRole ur = new SysUserRole();
         ur.setUserId(user.getId());

@@ -14,4 +14,5 @@ public class CurrentUserVO {
     private Set<String> roles;
     private Set<String> permissions;
     private String dataScope;
+    private boolean mustChangePassword;
 }

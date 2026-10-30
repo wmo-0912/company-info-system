@@ -20,6 +20,9 @@ public class SysUser {
 
     private String status;
 
+    /** 首次登录或管理员重置密码后为 true，需先修改密码才能继续使用 */
+    private Boolean mustChangePassword;
+
     private OffsetDateTime lastLoginAt;
 
     private Integer failedLoginCount;

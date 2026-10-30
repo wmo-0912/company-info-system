@@ -51,6 +51,8 @@ psql -U postgres -d company_info -f database/schema.sql
 htpasswd -bnBC 10 "" '<密码>' | tr -d ':\n'   # 输出 BCrypt 哈希
 ```
 
+插入时请显式设置 `must_change_password = TRUE`（列默认值为 `FALSE`）：这样首个管理员登录后会被强制修改初始化密码，避免部署文档里的示例口令长期留在生产库中。
+
 ## 5. 启动后端
 
 ```bash

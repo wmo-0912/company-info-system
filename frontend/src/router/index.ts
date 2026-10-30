@@ -53,6 +53,10 @@ router.beforeEach(async (to) => {
       return { path: '/login' }
     }
   }
+  // 首登/重置密码后强制先改密：除个人中心外一律拦截
+  if (auth.user?.mustChangePassword && to.path !== '/profile') {
+    return { path: '/profile', query: { forcePasswordChange: '1' } }
+  }
   const perm = to.meta.perm as string | undefined
   if (perm && !auth.has(perm)) {
     return { path: '/' }
