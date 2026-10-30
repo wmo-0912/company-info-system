@@ -37,4 +37,9 @@ public class BusinessException extends RuntimeException {
     public static BusinessException unprocessable(String message) {
         return new BusinessException("UNPROCESSABLE", 422, message);
     }
+
+    /** 429：请求过于频繁（如登录按 IP 限流） */
+    public static BusinessException tooManyRequests(String message) {
+        return new BusinessException("TOO_MANY_REQUESTS", 429, message);
+    }
 }

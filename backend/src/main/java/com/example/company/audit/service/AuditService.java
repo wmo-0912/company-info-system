@@ -2,13 +2,12 @@ package com.example.company.audit.service;
 
 import com.example.company.audit.entity.AuditLog;
 import com.example.company.audit.mapper.AuditLogMapper;
+import com.example.company.common.web.ClientIp;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -20,9 +19,6 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 @Service
 @RequiredArgsConstructor
 public class AuditService {
-
-    /** 与 sys_audit_log.ip_address 的列宽保持一致 */
-    private static final int MAX_IP_LENGTH = 64;
 
     private final AuditLogMapper auditLogMapper;
 
@@ -78,21 +74,6 @@ public class AuditService {
         if (!(attributes instanceof ServletRequestAttributes servletAttributes)) {
             return null;
         }
-        HttpServletRequest request = servletAttributes.getRequest();
-        String forwarded = request.getHeader("X-Forwarded-For");
-        String ip = null;
-        if (StringUtils.hasText(forwarded)) {
-            ip = forwarded.split(",")[0].trim();
-        }
-        if (!StringUtils.hasText(ip)) {
-            ip = request.getHeader("X-Real-IP");
-        }
-        if (!StringUtils.hasText(ip)) {
-            ip = request.getRemoteAddr();
-        }
-        if (!StringUtils.hasText(ip)) {
-            return null;
-        }
-        return ip.length() > MAX_IP_LENGTH ? ip.substring(0, MAX_IP_LENGTH) : ip;
+        return ClientIp.resolve(servletAttributes.getRequest());
     }
 }
