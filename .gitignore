@@ -35,3 +35,6 @@ build/
 application-local.yml
 
 node_modules/
+
+# 本地工具配置
+.trae/
