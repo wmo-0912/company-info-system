@@ -14,12 +14,6 @@
           登 录
         </el-button>
       </el-form>
-      <el-alert type="info" :closable="false" class="tip">
-        <p>演示账号：</p>
-        <p>admin / Admin@123（管理员）</p>
-        <p>hr / Hr@123456（人事）　pm / Pm@123456（项目经理）</p>
-        <p>zhangsan / Emp@123456（普通员工）</p>
-      </el-alert>
     </el-card>
   </div>
 </template>
@@ -81,14 +75,5 @@ async function onSubmit() {
 
 .login-btn {
   width: 100%;
-}
-
-.tip {
-  margin-top: 16px;
-}
-
-.tip p {
-  margin: 2px 0;
-  font-size: 12px;
 }
 </style>
