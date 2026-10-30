@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -25,8 +26,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import java.util.List;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -171,6 +175,32 @@ class EmployeeServiceImplTest {
         service.update(10L, baseUpdateRequest(2L));
 
         assertEquals(2L, e.getDepartmentId());
+    }
+
+    @Test
+    void updateAuditSummaryRecordsFieldLevelDiff() {
+        Employee e = employee(EmployeeStatus.PENDING.name(), 1L, "实习工程师");
+        e.setEmployeeNo("E0100");
+        e.setPhone("13800001111");
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department source = activeDept();
+        Department target = activeDept();
+        target.setId(2L);
+        target.setDepartmentName("产品部");
+        when(departmentMapper.selectById(1L)).thenReturn(source);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        EmployeeUpdateRequest req = baseUpdateRequest(2L);
+        req.setPhone("13900002222");
+        service.update(10L, req);
+
+        ArgumentCaptor<String> summary = ArgumentCaptor.forClass(String.class);
+        verify(auditService).success(eq("employee:update"), eq("employee"), eq(10L), summary.capture());
+        assertThat(summary.getValue())
+                .startsWith("更新员工档案 E0100")
+                .contains("部门 研发部→产品部")
+                .contains("手机号 138****1111→139****2222")
+                .doesNotContain("13900002222");
     }
 
     @Test

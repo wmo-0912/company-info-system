@@ -3,6 +3,7 @@ package com.example.company.employee.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.company.audit.service.AuditService;
+import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
@@ -109,6 +110,8 @@ public class EmployeeServiceImpl implements EmployeeService {
         if (EmployeeStatus.RESIGNED.name().equals(employee.getEmploymentStatus())) {
             throw BusinessException.unprocessable("已离职员工档案不可编辑");
         }
+        // 修改前先取关键字段快照，写库后据此生成字段级变更写进审计摘要
+        AuditDiff.Snapshot before = AuditDiff.snapshot(employee);
         employee.setEmployeeName(request.getEmployeeName());
         employee.setGender(request.getGender());
         employee.setBirthDate(request.getBirthDate());
@@ -139,7 +142,9 @@ public class EmployeeServiceImpl implements EmployeeService {
         employee.setHireDate(request.getHireDate());
         employee.setRemark(request.getRemark());
         employeeMapper.updateById(employee);
-        auditService.success("employee:update", "employee", id, "更新员工档案 " + employee.getEmployeeNo());
+        String diff = AuditDiff.describe(before, employee, this::formatAuditValue);
+        auditService.success("employee:update", "employee", id,
+                "更新员工档案 " + employee.getEmployeeNo() + (diff.isEmpty() ? "" : "；" + diff));
         return toDetailVO(employee, true);
     }
 
@@ -152,6 +157,19 @@ public class EmployeeServiceImpl implements EmployeeService {
         }
         employeeMapper.deleteById(id);
         auditService.success("employee:archive", "employee", id, "归档员工 " + employee.getEmployeeNo());
+    }
+
+    /** 审计变更的可读化：部门与直属主管显示名称而不是内部 ID */
+    private String formatAuditValue(String field, Object value) {
+        if ("departmentId".equals(field)) {
+            Department dept = departmentMapper.selectById((Long) value);
+            return dept == null ? null : dept.getDepartmentName();
+        }
+        if ("managerEmployeeId".equals(field)) {
+            Employee manager = employeeMapper.selectById((Long) value);
+            return manager == null ? null : manager.getEmployeeName();
+        }
+        return null;
     }
 
     public Employee requireEmployee(Long id) {

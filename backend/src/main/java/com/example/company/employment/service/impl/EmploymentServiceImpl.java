@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.company.audit.service.AuditService;
+import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.ChangeType;
 import com.example.company.common.enums.EmployeeStatus;
@@ -166,6 +167,8 @@ public class EmploymentServiceImpl implements EmploymentService {
 
         // 批准：事务内更新员工主档 + 写入任职历史 + 更新申请状态
         Employee employee = requireEmployee(req.getEmployeeId());
+        // 主档更新前取快照，批准后据此生成字段级变更（部门/岗位/状态/日期）
+        AuditDiff.Snapshot before = AuditDiff.snapshot(employee);
         applyApproval(req, employee);
         employeeMapper.updateById(employee);
         String resignDetail = ChangeType.RESIGN.name().equals(req.getChangeType())
@@ -183,8 +186,11 @@ public class EmploymentServiceImpl implements EmploymentService {
 
         req.setStatus(RequestStatus.APPROVED.name());
         requestMapper.updateById(req);
+        String employeeDiff = AuditDiff.describe(before, employee, this::formatAuditValue);
         auditService.success("employment:approve", "change_request", id,
-                "批准申请 " + req.getRequestNo() + (resignDetail == null ? "" : "；" + resignDetail));
+                "批准申请 " + req.getRequestNo()
+                        + (employeeDiff.isEmpty() ? "" : "；" + employeeDiff)
+                        + (resignDetail == null ? "" : "；" + resignDetail));
         return toVO(req);
     }
 
@@ -306,6 +312,19 @@ public class EmploymentServiceImpl implements EmploymentService {
             }
         }
         req.getPayload().put("snapshot", snapshot);
+    }
+
+    /** 审计变更的可读化：部门与直属主管显示名称而不是内部 ID */
+    private String formatAuditValue(String field, Object value) {
+        if ("departmentId".equals(field)) {
+            Department dept = departmentMapper.selectById((Long) value);
+            return dept == null ? null : dept.getDepartmentName();
+        }
+        if ("managerEmployeeId".equals(field)) {
+            Employee manager = employeeMapper.selectById((Long) value);
+            return manager == null ? null : manager.getEmployeeName();
+        }
+        return null;
     }
 
     /**
