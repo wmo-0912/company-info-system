@@ -142,4 +142,4 @@ A：清空数据库后重启（local profile）即可重新初始化：`psql -U 
 
 阿里云轻量应用服务器（Ubuntu 镜像 + PostgreSQL 17）从选镜像到上线的完整流程见 [docs/deployment-alibaba-cloud.md](docs/deployment-alibaba-cloud.md)。
 
-上线后的日常发布、回滚、备份、安全与巡检操作见 [docs/operations-manual.md](docs/operations-manual.md)。
+
