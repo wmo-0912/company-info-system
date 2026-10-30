@@ -25,14 +25,14 @@
       <el-header class="header">
         <div class="header-title">{{ currentTitle }}</div>
         <el-dropdown trigger="click" @command="onCommand">
-          <span class="user-info" title="右键进入个人中心" @contextmenu.prevent="openProfile">
-            <el-icon class="user-avatar"><UserFilled /></el-icon>
+          <span class="user-info">
             {{ auth.user?.displayName || auth.user?.username }}
             <el-icon><ArrowDown /></el-icon>
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+              <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -56,8 +56,7 @@ import {
   Setting,
   Switch,
   TrendCharts,
-  User,
-  UserFilled
+  User
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -122,17 +121,12 @@ const currentTitle = computed(() => {
 })
 
 async function onCommand(command: string) {
-  if (command === 'logout') {
+  if (command === 'profile') {
+    router.push('/profile')
+  } else if (command === 'logout') {
     await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
     await auth.logout()
     router.push('/login')
-  }
-}
-
-/** 个人中心不在导航栏展示，只能通过右键右上角用户图标进入 */
-function openProfile() {
-  if (auth.has('profile:read')) {
-    router.push('/profile')
   }
 }
 </script>
@@ -177,10 +171,6 @@ function openProfile() {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-.user-avatar {
-  font-size: 18px;
 }
 
 .main {
