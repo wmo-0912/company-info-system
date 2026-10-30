@@ -34,10 +34,14 @@ app:
   seed-demo-data: ${SEED_DEMO_DATA:false}
 
 springdoc:
-  swagger-ui:
-    path: /swagger-ui/index.html
+  # 接口文档默认关闭：生产不暴露 /swagger-ui 与 /v3/api-docs。
+  # 本地联调时用 SPRINGDOC_ENABLED=true 或 --spring.profiles.active=dev 打开。
   api-docs:
     path: /v3/api-docs
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    path: /swagger-ui/index.html
+    enabled: ${SPRINGDOC_ENABLED:false}
 
 logging:
   level:

@@ -27,12 +27,15 @@ export DB_USERNAME="company_app"
 export DB_PASSWORD="<强密码>"
 export JWT_SECRET="<至少32字节的随机字符串>"
 export SEED_DEMO_DATA=false
+# 接口文档默认关闭；生产如需临时开放，显式设为 true 并在用完后关闭
+export SPRINGDOC_ENABLED=false
 ```
 
 注意：
 
 - `JWT_SECRET` 不足 32 字节时应用启动直接失败，这是有意设计。
 - 生产环境 `SEED_DEMO_DATA` 必须为 `false`，不会自动创建任何账号。
+- 生产环境 `SPRINGDOC_ENABLED` 必须为 `false`：关闭后 `/swagger-ui/**` 与 `/v3/api-docs/**` 既不再注册路由，也会被安全链拦成 401，不会暴露内部接口清单。
 - 不要把上述值提交到 Git；可使用 systemd `EnvironmentFile`、K8s Secret 等注入。
 
 ## 4. 初始化数据库
@@ -84,8 +87,9 @@ WantedBy=multi-user.target
 
 - `/` → 前端 `dist` 静态文件，SPA fallback 到 `index.html`
 - `/api/` → `http://127.0.0.1:8080/api/`（保持路径不变）
-- `/swagger-ui/`、`/v3/api-docs/` 生产建议不对外暴露或加访问控制
-- 生产必须启用 HTTPS（证书 + `ssl` 配置）
+- `/swagger-ui/`、`/v3/api-docs/` 由 `SPRINGDOC_ENABLED=false` 默认关闭，示例配置里再兜底 return 404（双层保险）
+- 生产必须启用 HTTPS（证书 + `ssl` 配置），并带 HSTS
+- 安全响应头：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: same-origin`、`Content-Security-Policy`（后端对 `/api/` 也返回同类头）
 - 合理的 `client_max_body_size` 与超时
 
 ## 7. 健康检查与日志排查

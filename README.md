@@ -49,7 +49,9 @@ cd backend
 
 - 服务地址：`http://localhost:8080`
 - `local` profile 下 `app.seed-demo-data=true`，首次启动在空库中自动写入演示数据（角色、权限、部门、员工、用户、项目组、字典等）
-- Swagger UI：`http://localhost:8080/swagger-ui/index.html`
+- Swagger UI（生产默认关闭）：`http://localhost:8080/swagger-ui/index.html`
+  - 本地想看接口文档，启动时叠加 dev profile：`.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local,dev"`，或设 `SPRINGDOC_ENABLED=true`
+  - 未开启时 `/swagger-ui/**`、`/v3/api-docs/**` 不注册路由并被安全链拦成 401
 
 生产/自定义环境通过环境变量配置：
 
@@ -74,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（68 个单元/切片测试，不依赖数据库）
+# 后端测试（72 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
