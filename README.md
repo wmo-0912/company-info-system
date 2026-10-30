@@ -76,7 +76,7 @@ npm run dev
 ### 4. 构建与测试
 
 ```powershell
-# 后端测试（140 个单元/切片测试，不依赖数据库）
+# 后端测试（147 个单元/切片测试，不依赖数据库）
 cd backend; .\mvnw.cmd clean test
 
 # 前端类型检查与生产构建
@@ -144,6 +144,8 @@ cd frontend; npm run type-check; npm run build
 20. **会话版本（token_version）**：JWT 里带 `ver` 声明，与 `sys_user.token_version` 比对，不一致即视为未认证。本人改密、管理员重置密码都会把该列 +1，因此所有旧 token（含发起改密的那个会话）立即失效，前端改密成功后自动跳转登录页。没有引入 Redis 黑名单，符合 D02「最小技术栈」约束；升级既有库需执行 `database/migrations/2026-10-30-token-version.sql`。代价是"强制下线某个用户"目前仍只能靠停用账号（尚未提供"只踢会话不停号"的按钮）。
 
 21. **申请附加信息（payload）白名单**：`employee_change_request.payload` 是 JSONB，写入前按申请类型校验——只有 `TRANSFER` 允许 `targetDepartmentId` / `targetPositionName`，其余类型带任何键都返回 400；岗位名要求非空且不超过 100 字符；批准时回写的内部键 `snapshot` 单独放行。这样"前端漏传/传错键"不会变成一条看起来正常、实际什么都没改的申请。
+
+22. **密码历史**：`sys_password_history` 只存 BCrypt 哈希，改密/重置/新建用户时各写入一条，事务内裁剪到最近 5 条。改密与"管理员显式指定新密码"都会先比对最近 5 个历史密码，命中则 400（`新密码不能与最近 5 次使用过的密码相同`）；系统生成的随机密码不比对但仍记入历史。存量用户的历史无法回溯，从下一次改密起生效。迁移脚本：`database/migrations/2026-10-30-password-history.sql`。
 
 ## 常见问题
 

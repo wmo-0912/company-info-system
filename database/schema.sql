@@ -20,6 +20,16 @@ CREATE TABLE sys_user (
     deleted            BOOLEAN      NOT NULL DEFAULT FALSE
 );
 
+-- 历史密码指纹：改密/重置时写入，仅保留最近 5 条，用于阻止改回旧密码
+CREATE TABLE sys_password_history (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id       BIGINT       NOT NULL REFERENCES sys_user (id),
+    password_hash VARCHAR(100) NOT NULL,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_password_history_user ON sys_password_history (user_id, id DESC);
+
 CREATE TABLE sys_role (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     role_code   VARCHAR(64)  NOT NULL UNIQUE,

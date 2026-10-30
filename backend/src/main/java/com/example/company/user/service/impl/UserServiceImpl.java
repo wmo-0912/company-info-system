@@ -16,6 +16,7 @@ import com.example.company.role.mapper.SysRoleMapper;
 import com.example.company.user.dto.LoginRequest;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.PasswordHistoryService;
 import com.example.company.user.service.UserService;
 import com.example.company.user.vo.CurrentUserVO;
 import com.example.company.user.vo.LoginResponse;
@@ -44,6 +45,7 @@ public class UserServiceImpl implements UserService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final JwtTokenProvider tokenProvider;
+    private final PasswordHistoryService passwordHistoryService;
 
     @Override
     public LoginUser loadLoginUser(Long userId) {
@@ -172,12 +174,15 @@ public class UserServiceImpl implements UserService {
         if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
             throw BusinessException.badRequest("新密码不能与原密码相同");
         }
+        // 也不能与最近用过的旧密码相同，否则用户可以在两个旧密码之间来回切换
+        passwordHistoryService.assertNotReused(userId, newPassword);
         // 只更新密码相关列：避免把整实体（含 lastLoginAt 等）回写造成并发覆盖
         SysUser patch = new SysUser();
         patch.setId(userId);
         patch.setPasswordHash(passwordEncoder.encode(newPassword));
         patch.setMustChangePassword(false);
         userMapper.updateById(patch);
+        passwordHistoryService.record(userId, patch.getPasswordHash());
         // 改密后让所有旧 token（含当前会话）失效，必须重新登录
         userMapper.bumpTokenVersion(userId);
         auditService.success("auth:change-password", "user", userId, "本人修改登录密码，所有旧会话已失效");
@@ -192,12 +197,18 @@ public class UserServiceImpl implements UserService {
         }
         String effective = StringUtils.hasText(newPassword) ? newPassword : PasswordPolicy.generate();
         PasswordPolicy.validate(effective);
+        if (StringUtils.hasText(newPassword)) {
+            // 管理员显式指定密码时同样受历史限制；系统随机生成的密码不拦
+            passwordHistoryService.assertNotReused(userId, effective);
+        }
+        String encoded = passwordEncoder.encode(effective);
         SysUser patch = new SysUser();
         patch.setId(userId);
-        patch.setPasswordHash(passwordEncoder.encode(effective));
+        patch.setPasswordHash(encoded);
         patch.setMustChangePassword(true);
         patch.setFailedLoginCount(0);
         userMapper.updateById(patch);
+        passwordHistoryService.record(userId, encoded);
         // 管理员重置后，被重置用户原有的登录会话立即失效
         userMapper.bumpTokenVersion(userId);
         // 审计只记动作，绝不记录明文密码

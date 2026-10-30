@@ -16,6 +16,7 @@ import com.example.company.user.dto.ResetPasswordRequest;
 import com.example.company.user.dto.UserCreateRequest;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.PasswordHistoryService;
 import com.example.company.user.service.UserService;
 import com.example.company.user.vo.ResetPasswordVO;
 import com.example.company.user.vo.UserVO;
@@ -51,6 +52,7 @@ public class UserAdminController {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final UserService userService;
+    private final PasswordHistoryService passwordHistoryService;
 
     @Operation(summary = "用户分页列表")
     @GetMapping
@@ -98,6 +100,8 @@ public class UserAdminController {
         // 初始密码由管理员线下交付，首次登录必须自行修改
         user.setMustChangePassword(true);
         userMapper.insert(user);
+        // 初始密码也进历史：用户首次改密后不能直接改回初始密码
+        passwordHistoryService.record(user.getId(), user.getPasswordHash());
         saveUserRoles(user.getId(), roles.stream().map(SysRole::getId).toList());
         auditService.success("user:create", "user", user.getId(), "创建用户 " + user.getUsername());
         return ApiResponse.ok(toVO(user));
