@@ -181,6 +181,75 @@ class EmploymentServiceImplTest {
     }
 
     @Test
+    void regularizeRejectsUnexpectedPayloadKeys() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("REGULARIZE");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("targetDepartmentId"), ex.getMessage());
+        verify(requestMapper, never()).insert(any(EmployeeChangeRequest.class));
+    }
+
+    @Test
+    void transferRejectsBlankTargetPositionName() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("TRANSFER");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L, "targetPositionName", "   "));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("目标岗位名称"), ex.getMessage());
+    }
+
+    @Test
+    void transferRejectsOverlongTargetPositionName() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("TRANSFER");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L, "targetPositionName", "岗".repeat(101)));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+    }
+
+    @Test
+    void approvedRequestKeepsInternalSnapshotKeyAllowed() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        EmployeeChangeRequest req = submittedRequest("TRANSFER");
+        req.getPayload().put("targetDepartmentId", 2L);
+        req.getPayload().put("snapshot", Map.of("oldDepartmentId", 1L));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department target = new Department();
+        target.setId(2L);
+        target.setStatus("ACTIVE");
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        service.process(100L, dto);
+
+        assertEquals(2L, e.getDepartmentId());
+        assertEquals("APPROVED", req.getStatus());
+    }
+
+    @Test
     void transferRequiresActiveTargetDepartment() {
         Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
         when(employeeMapper.selectById(10L)).thenReturn(e);

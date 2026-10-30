@@ -248,8 +248,41 @@ public class EmploymentServiceImpl implements EmploymentService {
         return EmployeeStatus.PROBATION.name().equals(status) || EmployeeStatus.REGULAR.name().equals(status);
     }
 
+    /** 申请附加信息只允许这些键（其余一律拒绝，避免脏键静默写进 JSONB） */
+    private static final Set<String> TRANSFER_PAYLOAD_KEYS = Set.of("targetDepartmentId", "targetPositionName");
+    /** 批准时回写的内部键，校验时放行 */
+    private static final Set<String> INTERNAL_PAYLOAD_KEYS = Set.of("snapshot");
+    private static final int MAX_POSITION_NAME_LENGTH = 100;
+
+    /**
+     * payload 是 JSONB，没有 schema 约束；这里按申请类型做白名单与取值校验，
+     * 避免"前端漏传/传错键"变成一条看起来正常、实际什么都没改的申请。
+     */
+    private void validatePayload(ChangeType type, Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        Set<String> allowed = type == ChangeType.TRANSFER ? TRANSFER_PAYLOAD_KEYS : Set.of();
+        for (String key : payload.keySet()) {
+            if (INTERNAL_PAYLOAD_KEYS.contains(key)) {
+                continue;
+            }
+            if (!allowed.contains(key)) {
+                throw BusinessException.badRequest("申请附加信息包含不支持的字段：" + key);
+            }
+        }
+        Object targetPosition = payload.get("targetPositionName");
+        if (targetPosition != null) {
+            String name = String.valueOf(targetPosition).trim();
+            if (name.isEmpty() || name.length() > MAX_POSITION_NAME_LENGTH) {
+                throw BusinessException.badRequest("目标岗位名称不能为空且不超过 " + MAX_POSITION_NAME_LENGTH + " 个字符");
+            }
+        }
+    }
+
     private void validateRequestForEmployee(ChangeType type, Employee employee, ChangeRequestCreateDTO dto) {
         String status = employee.getEmploymentStatus();
+        validatePayload(type, dto.getPayload());
         switch (type) {
             case ONBOARD -> {
                 if (!EmployeeStatus.PENDING.name().equals(status)) {
