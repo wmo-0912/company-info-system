@@ -104,10 +104,66 @@ class EmploymentServiceImplTest {
         req.setEmployeeId(10L);
         req.setChangeType(type);
         req.setStatus("SUBMITTED");
-        req.setEffectiveDate(LocalDate.now().plusDays(1));
+        req.setEffectiveDate(LocalDate.now());
         req.setPayload(new HashMap<>());
         req.setSubmittedBy(1L);
         return req;
+    }
+
+    private void authenticateAsHrWithEmployeeId(Long employeeId) {
+        LoginUser user = new LoginUser();
+        user.setUserId(2L);
+        user.setEmployeeId(employeeId);
+        user.setUsername("hr");
+        user.setRoles(Set.of("HR"));
+        user.setPermissions(Set.of("employment:submit", "employment:process"));
+        user.setDataScope("ALL");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null, List.of()));
+    }
+
+    @Test
+    void approveRejectsFutureEffectiveDate() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        EmployeeChangeRequest req = submittedRequest("REGULARIZE");
+        req.setEffectiveDate(LocalDate.now().plusDays(3));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.process(100L, dto));
+
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("尚未到达"), ex.getMessage());
+        assertEquals(EmployeeStatus.PROBATION.name(), e.getEmploymentStatus());
+        verify(employeeMapper, never()).updateById(any(Employee.class));
+    }
+
+    @Test
+    void rejectAllowsFutureEffectiveDate() {
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        req.setEffectiveDate(LocalDate.now().plusDays(30));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("REJECT");
+
+        service.process(100L, dto);
+
+        assertEquals("REJECTED", req.getStatus());
+    }
+
+    @Test
+    void cannotProcessRequestAboutSelf() {
+        authenticateAsHrWithEmployeeId(10L);
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.process(100L, dto));
+
+        assertEquals(403, ex.getHttpStatus());
+        verify(employeeMapper, never()).updateById(any(Employee.class));
     }
 
     @Test

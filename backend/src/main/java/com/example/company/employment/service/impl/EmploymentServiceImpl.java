@@ -142,6 +142,10 @@ public class EmploymentServiceImpl implements EmploymentService {
             throw BusinessException.badRequest("处理决定必须是 APPROVE 或 REJECT");
         }
 
+        LoginUser current = SecurityUtils.getCurrentUser();
+        if (current.getEmployeeId() != null && current.getEmployeeId().equals(req.getEmployeeId())) {
+            throw BusinessException.forbidden("不能办理与本人相关的入转调离申请，请由其他有权限的同事办理");
+        }
         Long processorId = SecurityUtils.getCurrentUserId();
         req.setProcessedBy(processorId);
         req.setProcessedAt(OffsetDateTime.now());
@@ -152,6 +156,12 @@ public class EmploymentServiceImpl implements EmploymentService {
             requestMapper.updateById(req);
             auditService.success("employment:reject", "change_request", id, "驳回申请 " + req.getRequestNo());
             return toVO(req);
+        }
+
+        // 批准的生效日期必须已到：未到期就改主档会让"提前生效"变成既成事实，无法回滚
+        if (req.getEffectiveDate() != null && req.getEffectiveDate().isAfter(LocalDate.now())) {
+            throw BusinessException.unprocessable("生效日期 " + req.getEffectiveDate()
+                    + " 尚未到达，请在当天或之后办理；如需变更请驳回归还申请人修改");
         }
 
         // 批准：事务内更新员工主档 + 写入任职历史 + 更新申请状态

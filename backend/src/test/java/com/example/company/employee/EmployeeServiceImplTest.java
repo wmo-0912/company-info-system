@@ -112,6 +112,7 @@ class EmployeeServiceImplTest {
     void updateRejectsSelfAsManager() {
         Employee e = new Employee();
         e.setId(10L);
+        e.setDepartmentId(1L);
         e.setEmploymentStatus(EmployeeStatus.REGULAR.name());
         when(employeeMapper.selectById(10L)).thenReturn(e);
         when(departmentMapper.selectById(1L)).thenReturn(activeDept());
@@ -121,6 +122,55 @@ class EmployeeServiceImplTest {
         req.setManagerEmployeeId(10L);
         BusinessException ex = assertThrows(BusinessException.class, () -> service.update(10L, req));
         assertEquals(400, ex.getHttpStatus());
+    }
+
+    private Employee employee(String status, Long departmentId, String positionName) {
+        Employee e = new Employee();
+        e.setId(10L);
+        e.setDepartmentId(departmentId);
+        e.setPositionName(positionName);
+        e.setEmploymentStatus(status);
+        return e;
+    }
+
+    private EmployeeUpdateRequest baseUpdateRequest(Long departmentId) {
+        EmployeeUpdateRequest req = new EmployeeUpdateRequest();
+        req.setEmployeeName("张三");
+        req.setDepartmentId(departmentId);
+        return req;
+    }
+
+    @Test
+    void updateRejectsDepartmentChangeForOnboardedEmployee() {
+        when(employeeMapper.selectById(10L)).thenReturn(employee(EmployeeStatus.REGULAR.name(), 1L, "后端工程师"));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.update(10L, baseUpdateRequest(2L)));
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("调岗"), ex.getMessage());
+    }
+
+    @Test
+    void updateRejectsPositionChangeForOnboardedEmployee() {
+        when(employeeMapper.selectById(10L)).thenReturn(employee(EmployeeStatus.REGULAR.name(), 1L, "后端工程师"));
+        when(departmentMapper.selectById(1L)).thenReturn(activeDept());
+        EmployeeUpdateRequest req = baseUpdateRequest(1L);
+        req.setPositionName("前端工程师");
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.update(10L, req));
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("调岗"), ex.getMessage());
+    }
+
+    @Test
+    void updateAllowsDepartmentFixBeforeOnboarding() {
+        Employee e = employee(EmployeeStatus.PENDING.name(), 1L, null);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department target = activeDept();
+        target.setId(2L);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        service.update(10L, baseUpdateRequest(2L));
+
+        assertEquals(2L, e.getDepartmentId());
     }
 
     @Test

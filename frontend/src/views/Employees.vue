@@ -81,12 +81,14 @@
             <el-form-item label="部门" prop="departmentId">
               <el-tree-select v-model="form.departmentId" :data="deptTree" check-strictly node-key="id"
                 :props="{ label: 'departmentName', children: 'children' }" :render-after-expand="false"
-                style="width: 100%" />
+                :disabled="lockOrgFields" style="width: 100%" />
+              <div v-if="lockOrgFields" class="form-hint">部门调整请走「入转调离 → 调岗」流程</div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="岗位">
-              <el-input v-model="form.positionName" />
+              <el-input v-model="form.positionName" :disabled="lockOrgFields" />
+              <div v-if="lockOrgFields" class="form-hint">岗位调整请走「入转调离 → 调岗」流程</div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -147,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { createEmployee, getEmployee, pageEmployees, updateEmployee } from '@/api/employee'
@@ -172,6 +174,8 @@ const total = ref(0)
 
 const dialogVisible = ref(false)
 const editing = ref<EmployeeListItem | null>(null)
+// 入职后部门/岗位只能由调岗流程变更，档案编辑只允许待入职员工修正
+const lockOrgFields = computed(() => !!editing.value && editing.value.employmentStatus !== 'PENDING')
 const saving = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive({
@@ -320,5 +324,12 @@ onMounted(async () => {
 .pager {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+.form-hint {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--el-text-color-secondary);
 }
 </style>

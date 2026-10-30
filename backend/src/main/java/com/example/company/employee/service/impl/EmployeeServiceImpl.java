@@ -118,9 +118,21 @@ public class EmployeeServiceImpl implements EmployeeService {
         employee.setEmergencyContactName(request.getEmergencyContactName());
         employee.setEmergencyContactPhone(request.getEmergencyContactPhone());
         employee.setEducationCode(request.getEducationCode());
-        assertDepartmentActive(request.getDepartmentId());
-        employee.setDepartmentId(request.getDepartmentId());
-        employee.setPositionName(request.getPositionName());
+        // 部门/岗位属于调岗流程的产物：待入职阶段可直接修正，入职后只能通过 TRANSFER 申请变更
+        boolean preboarding = EmployeeStatus.PENDING.name().equals(employee.getEmploymentStatus());
+        if (request.getDepartmentId() != null) {
+            if (!preboarding && !request.getDepartmentId().equals(employee.getDepartmentId())) {
+                throw BusinessException.unprocessable("调整部门请提交调岗（TRANSFER）申请，档案编辑不能直接修改部门");
+            }
+            assertDepartmentActive(request.getDepartmentId());
+            employee.setDepartmentId(request.getDepartmentId());
+        }
+        if (StringUtils.hasText(request.getPositionName())) {
+            if (!preboarding && !request.getPositionName().equals(employee.getPositionName())) {
+                throw BusinessException.unprocessable("调整岗位请提交调岗（TRANSFER）申请，档案编辑不能直接修改岗位");
+            }
+            employee.setPositionName(request.getPositionName());
+        }
         employee.setPositionLevelCode(request.getPositionLevelCode());
         assertManagerValid(request.getManagerEmployeeId(), id);
         employee.setManagerEmployeeId(request.getManagerEmployeeId());

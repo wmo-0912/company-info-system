@@ -94,16 +94,19 @@
           <el-input v-model="processForm.comment" type="textarea" :rows="3" />
         </el-form-item>
       </el-form>
+      <el-alert v-if="approveBlocked" type="warning" :closable="false" show-icon
+        title="生效日期未到，当前不能批准"
+        description="提前批准会让变更立即生效；请驳回归还申请人修改生效日期，或等到生效日期当天再办理。" />
       <template #footer>
         <el-button @click="processVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onProcess">确定</el-button>
+        <el-button type="primary" :loading="saving" :disabled="approveBlocked" @click="onProcess">确定</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   cancelChangeRequest,
@@ -148,7 +151,20 @@ const createRules: FormRules = {
   effectiveDate: [{ required: true, message: '请选择生效日期', trigger: 'change' }],
   targetDepartmentId: [{ required: true, message: '请选择目标部门', trigger: 'change' }]
 }
-const processForm = reactive({ id: 0, decision: 'APPROVE', comment: '' })
+const processForm = reactive({ id: 0, decision: 'APPROVE', comment: '', effectiveDate: '' })
+
+// 生效日期未到不能批准：后端同样拦截，这里提前提示避免无谓报错
+function todayStr() {
+  const d = new Date()
+  const m = `${d.getMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getDate()}`.padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+const futureEffective = computed(() => {
+  if (!processForm.effectiveDate) return false
+  return processForm.effectiveDate > todayStr()
+})
+const approveBlocked = computed(() => processForm.decision === 'APPROVE' && futureEffective.value)
 
 const employeeOptions = ref<EmployeeListItem[]>([])
 const deptTree = ref<DepartmentVO[]>([])
@@ -237,6 +253,7 @@ function openProcess(row: ChangeRequestVO) {
   processForm.id = row.id
   processForm.decision = 'APPROVE'
   processForm.comment = ''
+  processForm.effectiveDate = row.effectiveDate || ''
   processVisible.value = true
 }
 
