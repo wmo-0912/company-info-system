@@ -41,3 +41,7 @@ dist/
 .trae/
 /frontend/dist
 /frontend/dist/assets
+
+company_info.dump
+
+operations/
