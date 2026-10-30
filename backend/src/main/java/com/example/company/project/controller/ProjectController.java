@@ -4,6 +4,7 @@ import com.example.company.common.api.ApiResponse;
 import com.example.company.common.api.PageResponse;
 import com.example.company.project.dto.ProjectMemberRequest;
 import com.example.company.project.dto.ProjectRequest;
+import com.example.company.project.dto.ProjectStatusRequest;
 import com.example.company.project.service.ProjectService;
 import com.example.company.project.vo.ProjectMemberVO;
 import com.example.company.project.vo.ProjectVO;
@@ -13,9 +14,11 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @Tag(name = "项目组管理")
@@ -65,6 +68,14 @@ public class ProjectController {
         return ApiResponse.ok(projectService.update(id, request));
     }
 
+    @Operation(summary = "关闭 / 重新开启项目组")
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("hasAuthority('project:update')")
+    public ApiResponse<ProjectVO> updateStatus(@PathVariable Long id,
+                                               @Valid @RequestBody ProjectStatusRequest request) {
+        return ApiResponse.ok(projectService.updateStatus(id, request.getStatus()));
+    }
+
     @Operation(summary = "成员列表")
     @GetMapping("/{id}/members")
     @PreAuthorize("hasAuthority('project:read')")
@@ -80,11 +91,14 @@ public class ProjectController {
         return ApiResponse.ok(projectService.addMember(id, request));
     }
 
-    @Operation(summary = "移除成员（逻辑结束）")
+    @Operation(summary = "移除成员（逻辑结束，可指定离开日期）")
     @DeleteMapping("/{id}/members/{employeeId}")
     @PreAuthorize("hasAuthority('project:member:manage')")
-    public ApiResponse<Void> removeMember(@PathVariable Long id, @PathVariable Long employeeId) {
-        projectService.removeMember(id, employeeId);
+    public ApiResponse<Void> removeMember(@PathVariable Long id,
+                                          @PathVariable Long employeeId,
+                                          @RequestParam(required = false)
+                                          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate leftAt) {
+        projectService.removeMember(id, employeeId, leftAt);
         return ApiResponse.ok();
     }
 }

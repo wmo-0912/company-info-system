@@ -50,8 +50,10 @@ public class DataScopeService {
         if (managerEmployeeId == null) {
             return Set.of();
         }
+        // 已关闭的项目组不再扩大数据范围，避免历史成员长期可见
         List<ProjectTeam> teams = projectTeamMapper.selectList(new QueryWrapper<ProjectTeam>()
-                .eq("manager_employee_id", managerEmployeeId));
+                .eq("manager_employee_id", managerEmployeeId)
+                .eq("status", "ACTIVE"));
         Set<Long> result = new HashSet<>();
         result.add(managerEmployeeId); // 自己始终可见
         if (teams.isEmpty()) {

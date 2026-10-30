@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost, apiPut } from './http'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from './http'
 import type { PageResponse, ProjectMemberVO, ProjectVO } from './types'
 
 export interface ProjectBody {
@@ -32,10 +32,15 @@ export function fetchProjectMembers(id: number) {
   return apiGet<ProjectMemberVO[]>(`/projects/${id}/members`)
 }
 
-export function addProjectMember(id: number, employeeId: number, memberRole?: string) {
-  return apiPost<ProjectMemberVO>(`/projects/${id}/members`, { employeeId, memberRole })
+export function updateProjectStatus(id: number, status: 'ACTIVE' | 'CLOSED') {
+  return apiPatch<ProjectVO>(`/projects/${id}/status`, { status })
 }
 
-export function removeProjectMember(id: number, employeeId: number) {
-  return apiDelete<void>(`/projects/${id}/members/${employeeId}`)
+export function addProjectMember(id: number, employeeId: number, memberRole?: string, joinedAt?: string) {
+  return apiPost<ProjectMemberVO>(`/projects/${id}/members`, { employeeId, memberRole, joinedAt })
+}
+
+/** leftAt 为空时后端取当天；历史项目可补录实际离开日期 */
+export function removeProjectMember(id: number, employeeId: number, leftAt?: string) {
+  return apiDelete<void>(`/projects/${id}/members/${employeeId}`, leftAt ? { leftAt } : undefined)
 }

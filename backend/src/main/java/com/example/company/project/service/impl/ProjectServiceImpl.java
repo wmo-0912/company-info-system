@@ -123,6 +123,24 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
+    @Transactional
+    public ProjectVO updateStatus(Long id, String status) {
+        ProjectTeam team = requireTeam(id);
+        assertManageable(team);
+        if (!"ACTIVE".equals(status) && !"CLOSED".equals(status)) {
+            throw BusinessException.badRequest("状态只能是 ACTIVE 或 CLOSED");
+        }
+        if (status.equals(team.getStatus())) {
+            return toVO(team);
+        }
+        team.setStatus(status);
+        teamMapper.updateById(team);
+        auditService.success("project:status", "project", id,
+                ("CLOSED".equals(status) ? "关闭项目组 " : "重新开启项目组 ") + team.getProjectName());
+        return toVO(team);
+    }
+
+    @Override
     public List<ProjectMemberVO> members(Long id) {
         ProjectTeam team = requireTeam(id);
         assertVisible(team);
@@ -147,7 +165,7 @@ public class ProjectServiceImpl implements ProjectService {
         member.setProjectTeamId(id);
         member.setEmployeeId(request.getEmployeeId());
         member.setMemberRole(request.getMemberRole());
-        member.setJoinedAt(LocalDate.now());
+        member.setJoinedAt(request.getJoinedAt() == null ? LocalDate.now() : request.getJoinedAt());
         try {
             memberMapper.insert(member);
         } catch (DuplicateKeyException e) {
@@ -159,7 +177,7 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     @Transactional
-    public void removeMember(Long id, Long employeeId) {
+    public void removeMember(Long id, Long employeeId, LocalDate leftAt) {
         ProjectTeam team = requireTeam(id);
         assertManageable(team);
         ProjectTeamMember member = memberMapper.selectOne(new QueryWrapper<ProjectTeamMember>()
@@ -167,9 +185,14 @@ public class ProjectServiceImpl implements ProjectService {
         if (member == null) {
             throw BusinessException.notFound("该员工不是项目组有效成员");
         }
-        member.setLeftAt(LocalDate.now());
+        LocalDate leaveDate = leftAt == null ? LocalDate.now() : leftAt;
+        if (member.getJoinedAt() != null && leaveDate.isBefore(member.getJoinedAt())) {
+            throw BusinessException.badRequest("离开日期不能早于加入日期 " + member.getJoinedAt());
+        }
+        member.setLeftAt(leaveDate);
         memberMapper.updateById(member);
-        auditService.success("project:member:remove", "project", id, "移除成员员工ID=" + employeeId);
+        auditService.success("project:member:remove", "project", id,
+                "移除成员员工ID=" + employeeId + "，离开日期 " + leaveDate);
     }
 
     @Override

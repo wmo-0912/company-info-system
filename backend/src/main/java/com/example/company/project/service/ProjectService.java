@@ -6,6 +6,7 @@ import com.example.company.project.dto.ProjectRequest;
 import com.example.company.project.vo.ProjectMemberVO;
 import com.example.company.project.vo.ProjectVO;
 
+import java.time.LocalDate;
 import java.util.List;
 
 public interface ProjectService {
@@ -22,7 +23,11 @@ public interface ProjectService {
 
     ProjectMemberVO addMember(Long id, ProjectMemberRequest request);
 
-    void removeMember(Long id, Long employeeId);
+    /** 成员离开；leftAt 为空取当天，且不能早于加入日期 */
+    void removeMember(Long id, Long employeeId, LocalDate leftAt);
+
+    /** 关闭 / 重新开启项目组（ACTIVE / CLOSED） */
+    ProjectVO updateStatus(Long id, String status);
 
     List<ProjectVO> myTeams();
 }

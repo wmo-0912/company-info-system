@@ -45,6 +45,10 @@ const maps: Record<string, Record<string, string>> = {
     ACTIVE: '启用',
     DISABLED: '停用'
   },
+  projectStatus: {
+    ACTIVE: '进行中',
+    CLOSED: '已关闭'
+  },
   auditResult: {
     SUCCESS: '成功',
     FAILURE: '失败'
@@ -83,6 +87,10 @@ const tagTypes: Record<string, Record<string, TagType>> = {
   commonStatus: {
     ACTIVE: 'success',
     DISABLED: 'info'
+  },
+  projectStatus: {
+    ACTIVE: 'success',
+    CLOSED: 'info'
   },
   auditResult: {
     SUCCESS: 'success',

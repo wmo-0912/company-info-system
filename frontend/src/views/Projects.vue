@@ -18,16 +18,19 @@
       <el-table-column prop="memberCount" label="成员数" width="90" />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="dictTagType('commonStatus', row.status)">
-            {{ dictLabel('commonStatus', row.status) }}
+          <el-tag :type="dictTagType('projectStatus', row.status)">
+            {{ dictLabel('projectStatus', row.status) }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{ row }">
           <el-button v-if="auth.has('project:member:manage')" link type="primary"
             @click="openMembers(row)">成员管理</el-button>
           <el-button v-if="auth.has('project:update')" link type="primary" @click="openDialog(row)">编辑</el-button>
+          <el-button v-if="auth.has('project:update')" link
+            :type="row.status === 'ACTIVE' ? 'warning' : 'success'"
+            @click="onToggleStatus(row)">{{ row.status === 'ACTIVE' ? '关闭' : '重新开启' }}</el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -68,6 +71,8 @@
             :value="e.id" />
         </el-select>
         <el-input v-model="newMemberRole" placeholder="成员角色" style="width: 120px" />
+        <el-date-picker v-model="newMemberJoinedAt" type="date" placeholder="加入日期" value-format="YYYY-MM-DD"
+          style="width: 150px" :disabled-date="disableFutureDate" />
         <el-button type="primary" :disabled="!newMemberId" @click="onAddMember">添加</el-button>
       </div>
       <el-table v-loading="memberLoading" :data="members">
@@ -77,6 +82,9 @@
         <el-table-column prop="departmentName" label="部门" />
         <el-table-column prop="memberRole" label="角色" width="90">
           <template #default="{ row }">{{ row.memberRole || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="加入日期" width="120">
+          <template #default="{ row }">{{ row.joinedAt || '-' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="80">
           <template #default="{ row }">
@@ -101,7 +109,8 @@ import {
   fetchProjectMembers,
   pageProjects,
   removeProjectMember,
-  updateProject
+  updateProject,
+  updateProjectStatus
 } from '@/api/project'
 import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import type { ProjectMemberVO, ProjectVO } from '@/api/types'
@@ -113,7 +122,7 @@ const auth = useAuthStore()
 const keyword = ref('')
 const status = ref('')
 const onlyMine = ref(false)
-const statusOptions = dictOptions('commonStatus')
+const statusOptions = dictOptions('projectStatus')
 const records = ref<ProjectVO[]>([])
 const loading = ref(false)
 const page = ref(1)
@@ -142,6 +151,7 @@ const members = ref<ProjectMemberVO[]>([])
 const memberLoading = ref(false)
 const newMemberId = ref<number | null>(null)
 const newMemberRole = ref('')
+const newMemberJoinedAt = ref('')
 
 const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 
@@ -232,21 +242,72 @@ async function loadMembers() {
   }
 }
 
+function todayString(): string {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+/** 加入/离开日期不允许选未来日期（后端 @PastOrPresent 同样校验） */
+function disableFutureDate(date: Date): boolean {
+  return date.getTime() > Date.now()
+}
+
 async function onAddMember() {
   if (!currentProject.value || !newMemberId.value) return
-  await addProjectMember(currentProject.value.id, newMemberId.value, newMemberRole.value || undefined)
+  await addProjectMember(
+    currentProject.value.id,
+    newMemberId.value,
+    newMemberRole.value || undefined,
+    newMemberJoinedAt.value || undefined
+  )
   ElMessage.success('成员已添加')
   newMemberId.value = null
   newMemberRole.value = ''
+  newMemberJoinedAt.value = ''
   loadMembers()
   load()
 }
 
 async function onRemoveMember(row: ProjectMemberVO) {
-  await ElMessageBox.confirm(`确定将 ${row.employeeName} 移出项目组吗？`, '提示', { type: 'warning' })
-  await removeProjectMember(currentProject.value!.id, row.employeeId)
+  let leftAt: string | undefined
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `确定将 ${row.employeeName} 移出项目组吗？可填写实际离开日期（留空取今天）`,
+      '移出成员',
+      {
+        type: 'warning',
+        inputValue: todayString(),
+        inputPlaceholder: 'YYYY-MM-DD',
+        inputValidator: (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v) || '日期格式为 YYYY-MM-DD'
+      }
+    )
+    leftAt = value || undefined
+  } catch {
+    return
+  }
+  await removeProjectMember(currentProject.value!.id, row.employeeId, leftAt)
   ElMessage.success('已移出')
   loadMembers()
+  load()
+}
+
+async function onToggleStatus(row: ProjectVO) {
+  const closing = row.status === 'ACTIVE'
+  try {
+    await ElMessageBox.confirm(
+      closing
+        ? `关闭后「${row.projectName}」不能再新增成员，历史成员关系保留。确定关闭吗？`
+        : `重新开启「${row.projectName}」后可继续新增成员。确定开启吗？`,
+      closing ? '关闭项目组' : '重新开启项目组',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  await updateProjectStatus(row.id, closing ? 'CLOSED' : 'ACTIVE')
+  ElMessage.success(closing ? '项目组已关闭' : '项目组已重新开启')
   load()
 }
 

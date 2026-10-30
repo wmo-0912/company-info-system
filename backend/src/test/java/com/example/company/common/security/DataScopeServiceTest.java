@@ -73,6 +73,20 @@ class DataScopeServiceTest {
     }
 
     @Test
+    void projectScopeExcludesClosedTeams() {
+        when(projectTeamMapper.selectList(any())).thenReturn(List.of());
+
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(user("PROJECT", 7L));
+
+        assertEquals(Set.of(7L), visible);
+        org.mockito.ArgumentCaptor<QueryWrapper<ProjectTeam>> captor =
+                org.mockito.ArgumentCaptor.forClass(QueryWrapper.class);
+        org.mockito.Mockito.verify(projectTeamMapper).selectList(captor.capture());
+        assertTrue(captor.getValue().getSqlSegment().contains("status"),
+                "数据范围查询应排除已关闭的项目组: " + captor.getValue().getSqlSegment());
+    }
+
+    @Test
     void departmentScopeExpandsChildren() {
         Department root = dept(1L, null);
         Department child = dept(2L, 1L);
