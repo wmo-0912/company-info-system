@@ -3,6 +3,10 @@
     <div class="page-toolbar">
       <el-input v-model="keyword" placeholder="搜索姓名/编号" clearable style="width: 220px" @keyup.enter="reload"
         @clear="reload" />
+      <el-tree-select v-if="auth.has('department:read')" v-model="filterDept" clearable filterable
+        :data="deptTree" check-strictly node-key="id" :render-after-expand="false"
+        :props="{ label: 'departmentName', children: 'children' }" placeholder="部门筛选" style="width: 180px"
+        @change="reload" />
       <el-select v-model="status" placeholder="状态筛选" clearable style="width: 140px" @change="reload">
         <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
       </el-select>
@@ -158,6 +162,7 @@ const router = useRouter()
 
 const keyword = ref('')
 const status = ref('')
+const filterDept = ref<number | null>(null)
 const statusOptions = dictOptions('employeeStatus')
 const records = ref<EmployeeListItem[]>([])
 const loading = ref(false)
@@ -204,6 +209,7 @@ async function load() {
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value || undefined,
+      departmentId: filterDept.value || undefined,
       status: status.value || undefined
     })
     records.value = res.records
