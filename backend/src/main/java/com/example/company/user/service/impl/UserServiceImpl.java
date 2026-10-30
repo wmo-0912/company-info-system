@@ -1,6 +1,7 @@
 package com.example.company.user.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.company.audit.service.AuditService;
 import com.example.company.common.enums.DataScopeType;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.LoginUser;
@@ -20,7 +21,6 @@ import com.example.company.user.vo.LoginResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -39,6 +39,7 @@ public class UserServiceImpl implements UserService {
     private final SysPermissionMapper permissionMapper;
     private final EmployeeMapper employeeMapper;
     private final PasswordEncoder passwordEncoder;
+    private final AuditService auditService;
     private final JwtTokenProvider tokenProvider;
 
     @Override
@@ -90,33 +91,39 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
     public LoginResponse login(LoginRequest request) {
         SysUser user = userMapper.selectOne(new QueryWrapper<SysUser>().eq("username", request.getUsername()));
         // 统一错误提示，不泄露用户名是否存在
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            // 失败计数使用独立 UPDATE 语句落库：本方法刻意不加事务，
+            // 避免"随后抛异常导致计数与 LOCKED 状态回滚"（历史上锁定机制因此从未生效）。
             if (user != null) {
-                user.setFailedLoginCount(user.getFailedLoginCount() + 1);
-                if (user.getFailedLoginCount() >= MAX_FAILED_ATTEMPTS) {
-                    user.setStatus("LOCKED");
-                }
-                userMapper.updateById(user);
+                userMapper.incrementFailedLogin(user.getId(), MAX_FAILED_ATTEMPTS);
+                int failed = user.getFailedLoginCount() + 1;
+                auditService.recordForActor(user.getId(), user.getUsername(), "auth:login", "user", user.getId(), false,
+                        "登录失败，连续失败 " + failed + " 次" + (failed >= MAX_FAILED_ATTEMPTS ? "，账号已锁定" : ""));
+            } else {
+                auditService.recordForActor(null, request.getUsername(), "auth:login", "user", null, false,
+                        "登录失败：用户名不存在");
             }
             throw BusinessException.unauthorized("用户名或密码错误");
         }
         if (!"ACTIVE".equals(user.getStatus())) {
+            auditService.recordForActor(user.getId(), user.getUsername(), "auth:login", "user", user.getId(), false,
+                    "登录被拒绝：账号状态为 " + user.getStatus());
             throw BusinessException.unauthorized("账号已被停用或锁定，请联系管理员");
         }
 
+        userMapper.markLoginSuccess(user.getId());
         user.setFailedLoginCount(0);
         user.setLastLoginAt(OffsetDateTime.now());
-        userMapper.updateById(user);
 
         LoginUser loginUser = buildLoginUser(user);
         LoginResponse response = new LoginResponse();
         response.setToken(tokenProvider.generateToken(user.getId(), user.getUsername()));
         response.setExpiresAt(tokenProvider.expiresAt());
         response.setUser(toCurrentUserVO(loginUser));
+        auditService.recordForActor(user.getId(), user.getUsername(), "auth:login", "user", user.getId(), true, "登录成功");
         return response;
     }
 

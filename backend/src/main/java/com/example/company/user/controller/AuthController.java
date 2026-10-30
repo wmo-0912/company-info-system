@@ -1,5 +1,6 @@
 package com.example.company.user.controller;
 
+import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.ApiResponse;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.user.dto.LoginRequest;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final UserService userService;
+    private final AuditService auditService;
 
     @Operation(summary = "登录")
     @PostMapping("/login")
@@ -35,6 +37,7 @@ public class AuthController {
     @Operation(summary = "退出登录（客户端清除 token；本系统采用无状态 JWT，服务端不做即时吊销）")
     @PostMapping("/logout")
     public ApiResponse<Void> logout() {
+        auditService.success("auth:logout", "user", SecurityUtils.getCurrentUserId(), "退出登录");
         return ApiResponse.ok();
     }
 }

@@ -116,7 +116,7 @@ cd frontend; npm run type-check; npm run build
 1. **四角色 vs 五角色**：早期技术选型文档曾提及"五角色权限控制"，但需求文档只定义了四种角色。本系统只初始化 ADMIN / HR / PROJECT_MANAGER / EMPLOYEE 四种角色，权限模型支持未来新增角色，无需改动代码。
 2. **数据库迁移**：采用手动执行 `database/schema.sql` 的方式初始化数据库，未引入 Flyway；演示数据由 `app.seed-demo-data=true` 时的 Java 初始化器在运行时生成（BCrypt 哈希在运行时计算，不落明文）。
 3. **退出登录**：系统使用纯无状态 JWT，退出登录为客户端清除 token，已签发的 token 在过期前仍有效（JWT 默认有效期见 `app.jwt.expiration-minutes`）。如需服务端即时撤销，可后续增加 token 黑名单或会话版本字段。
-4. **登录锁定**：连续 5 次密码错误将账号置为 `LOCKED`，需管理员在用户管理中恢复为 `ACTIVE`。
+4. **登录锁定**：连续 5 次密码错误将账号置为 `LOCKED`，需管理员在用户管理中恢复为 `ACTIVE`。失败计数使用单条原子 `UPDATE`（不包事务），因此计数一定会落库；登录成功、失败、被锁定三种结果均写入审计日志并记录来源 IP。
 5. **逻辑删除**：核心业务表（用户、角色、部门、员工、项目组）使用 `deleted` 布尔字段软删，物理数据保留；流水/历史表（任职记录、变更申请、审计日志）不做软删。
 6. **员工姓名**：采用单一 `employee_name` 字段，未拆分姓/名。
 7. **员工状态变更入口**：员工在职状态（试用/转正/调动/离职）只能通过入转调离流程变更，因此未提供通用 `PATCH /api/v1/employees/{id}/status`，以避免绕过状态机；员工归档另设 `PATCH /api/v1/employees/{id}/archive`（仅已离职可归档）。
