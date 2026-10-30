@@ -1,7 +1,10 @@
 <template>
   <div class="login-page">
     <el-card class="login-card">
-      <div class="title">公司基本信息管理系统</div>
+      <div class="brand">
+        <img v-if="company.logoUrl" :src="company.logoUrl" alt="公司 Logo" class="brand-logo" />
+        <div class="title">{{ company.name }}</div>
+      </div>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" placeholder="请输入用户名" autocomplete="username" />
@@ -19,12 +22,14 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useCompanyStore } from '@/stores/company'
 
 const auth = useAuthStore()
+const company = useCompanyStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -36,6 +41,8 @@ const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
+
+onMounted(() => company.load())
 
 async function onSubmit() {
   await formRef.value?.validate()
@@ -71,11 +78,24 @@ async function onSubmit() {
   width: 400px;
 }
 
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.brand-logo {
+  height: 48px;
+  max-width: 240px;
+  object-fit: contain;
+}
+
 .title {
   font-size: 20px;
   font-weight: 600;
   text-align: center;
-  margin-bottom: 24px;
 }
 
 .login-btn {

@@ -24,6 +24,12 @@ export interface CurrentUser {
   mustChangePassword: boolean
 }
 
+/** 登录页展示用：公司名称与 Logo（公开接口，无需登录） */
+export interface CompanyInfo {
+  name: string
+  logoUrl: string | null
+}
+
 export interface LoginResponse {
   token: string
   tokenType: string

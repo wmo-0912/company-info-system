@@ -48,7 +48,9 @@ public class SecurityConfig {
                         .referrerPolicy(ref -> ref.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.SAME_ORIGIN))
                         .contentSecurityPolicy(csp -> csp.policyDirectives(CONTENT_SECURITY_POLICY)))
                 .authorizeHttpRequests(auth -> {
-                    auth.requestMatchers("/api/v1/auth/login", "/api/v1/health", "/error").permitAll();
+                    // 公开信息接口：登录页渲染公司名称/Logo 时还没有 token
+                    auth.requestMatchers("/api/v1/auth/login", "/api/v1/health", "/error",
+                            "/api/v1/public/company-info").permitAll();
                     // 文档路径仅在显式开启时公开，生产环境保持 unknown/401，避免暴露内部接口清单
                     if (apiDocsEnabled) {
                         auth.requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll();

@@ -1,7 +1,10 @@
 <template>
   <el-container class="layout">
     <el-aside width="220px" class="aside">
-      <div class="logo">公司信息管理系统</div>
+      <div class="logo">
+        <img v-if="company.logoUrl" :src="company.logoUrl" alt="公司 Logo" class="logo-img" />
+        <span v-else class="logo-text">{{ company.name }}</span>
+      </div>
       <el-menu :default-active="activePath" router background-color="#001529" text-color="#a6adb4"
         active-text-color="#ffffff" class="menu">
         <template v-for="item in visibleMenus" :key="item.title">
@@ -45,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
@@ -59,6 +62,7 @@ import {
   User
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCompanyStore } from '@/stores/company'
 
 interface MenuItem {
   title: string
@@ -68,8 +72,11 @@ interface MenuItem {
 }
 
 const auth = useAuthStore()
+const company = useCompanyStore()
 const route = useRoute()
 const router = useRouter()
+
+onMounted(() => company.load())
 
 const menus: (MenuItem & { perm?: string })[] = [
   { title: '首页仪表盘', path: '/', icon: Odometer, perm: 'dashboard:view' },
@@ -141,12 +148,26 @@ async function onCommand(command: string) {
 }
 
 .logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 60px;
-  line-height: 60px;
-  text-align: center;
+  padding: 0 12px;
   color: #fff;
   font-size: 16px;
   font-weight: 600;
+}
+
+.logo-img {
+  max-height: 36px;
+  max-width: 196px;
+  object-fit: contain;
+}
+
+.logo-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menu {

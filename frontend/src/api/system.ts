@@ -1,8 +1,13 @@
 import { apiGet, apiPut } from './http'
-import type { DashboardSummary, SysConfig } from './types'
+import type { CompanyInfo, DashboardSummary, SysConfig } from './types'
 
 export function fetchDashboardSummary() {
   return apiGet<DashboardSummary>('/dashboard/summary')
+}
+
+/** 公开接口：登录页在拿到 token 之前就需要公司名称与 Logo */
+export function fetchCompanyInfo() {
+  return apiGet<CompanyInfo>('/public/company-info')
 }
 
 export function listConfigs() {
