@@ -119,7 +119,7 @@ cd frontend; npm run type-check; npm run build
 ## 设计假设
 
 1. **四角色 vs 五角色**：早期技术选型文档曾提及"五角色权限控制"，但需求文档只定义了四种角色。本系统只初始化 ADMIN / HR / PROJECT_MANAGER / EMPLOYEE 四种角色，权限模型支持未来新增角色，无需改动代码。
-2. **数据库迁移**：采用手动执行 `database/schema.sql` 的方式初始化数据库，未引入 Flyway；演示数据由 `app.seed-demo-data=true` 时的 Java 初始化器在运行时生成（BCrypt 哈希在运行时计算，不落明文）。
+2. **数据库迁移**：采用手动执行 `database/schema.sql` 的方式初始化数据库，未引入 Flyway；**已上线的库升级必须按 `database/migrations/README.md` 的顺序执行迁移脚本**（`schema.sql` 只用于空库，不会给已有表补列）；演示数据由 `app.seed-demo-data=true` 时的 Java 初始化器在运行时生成（BCrypt 哈希在运行时计算，不落明文）。
 3. **退出登录**：系统使用纯无状态 JWT，退出登录为客户端清除 token，已签发的 token 在过期前仍有效（JWT 默认有效期见 `app.jwt.expiration-minutes`）。改密与管理员重置会使旧 token 立即失效（见第 20 条会话版本），但"只踢会话不停号"尚无入口。不过账号被停用（管理员禁用、离职联动）后，旧 token 会在下一次请求即失效——JWT 过滤器每次都会重新加载账号状态并校验 `status = ACTIVE`。
 4. **登录锁定**：连续 5 次密码错误将账号置为 `LOCKED`，需管理员在用户管理中恢复为 `ACTIVE`。失败计数使用单条原子 `UPDATE`（不包事务），因此计数一定会落库；登录成功、失败、被锁定三种结果均写入审计日志并记录来源 IP。账号被停用或锁定后，登录提示与"密码错误"完全一致（真实原因只进审计），避免用正确密码探测账号状态。
 5. **逻辑删除**：核心业务表（用户、角色、部门、员工、项目组）使用 `deleted` 布尔字段软删，物理数据保留；流水/历史表（任职记录、变更申请、审计日志）不做软删。
@@ -171,6 +171,9 @@ A：出于安全，用户名不存在与密码错误返回相同提示。确认�
 
 **Q：用户忘记密码或被锁定了怎么办？**
 A：管理员在「系统管理 → 用户管理」中点击「重置密码」，留空即生成一次性随机密码并强制该用户下次登录改密；若是被锁定（状态 `LOCKED`），先「启用」恢复为 `ACTIVE` 再重置密码。
+
+**Q：登录报 `字段 "must_change_password" 不存在`？**
+A：数据库是旧版结构。按 [database/migrations/README.md](database/migrations/README.md) 的顺序执行迁移脚本（至少要先跑 `2026-10-30-must-change-password.sql` 与 `2026-10-30-token-version.sql`），无需重跑 `schema.sql`。
 
 **Q：接口返回 403？**
 A：当前账号没有对应权限点或超出数据范围，属于预期行为；联系管理员在角色管理中调整。

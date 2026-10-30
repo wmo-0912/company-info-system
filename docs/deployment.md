@@ -47,6 +47,8 @@ psql -U postgres -c "CREATE DATABASE company_info OWNER company_app;"
 psql -U postgres -d company_info -f database/schema.sql
 ```
 
+**已有库升级**：不要重跑 `schema.sql`（`CREATE TABLE` 不会给已存在的表补列）。按 `database/migrations/README.md` 里的顺序执行迁移脚本；漏跑会表现为登录报 `字段 "must_change_password" 不存在` 这类缺列错误。
+
 首个管理员账号的创建方式：在数据库中手动插入一条 `sys_user`（BCrypt 哈希）与 `sys_user_role` 绑定，或用一次性脚本生成。哈希可用以下方式生成：
 
 ```bash
