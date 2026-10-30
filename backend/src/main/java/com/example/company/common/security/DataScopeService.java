@@ -10,12 +10,14 @@ import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
 import com.example.company.project.entity.ProjectTeam;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -23,6 +25,7 @@ import java.util.Set;
  * 返回 null 表示不限制（ALL）；返回集合表示仅允许集合内的员工 ID。
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class DataScopeService {
 
@@ -37,13 +40,28 @@ public class DataScopeService {
      * @return null 表示可见全部；空集合表示不可见任何员工
      */
     public Set<Long> visibleEmployeeIds(LoginUser user) {
-        String scope = user.getDataScope() == null ? DataScopeType.SELF.name() : user.getDataScope();
-        return switch (DataScopeType.valueOf(scope)) {
+        return switch (parseScope(user.getDataScope())) {
             case ALL -> null;
             case SELF -> user.getEmployeeId() == null ? Set.of() : Set.of(user.getEmployeeId());
             case PROJECT -> projectVisibleEmployeeIds(user.getEmployeeId());
             case DEPARTMENT -> departmentVisibleEmployeeIds(user.getEmployeeId());
         };
+    }
+
+    /**
+     * 解析数据范围枚举。脏数据/历史角色写入的非法值不能变成 500，按最小权限 SELF 处理并留日志，
+     * 由管理员在角色管理里修正取值。
+     */
+    private DataScopeType parseScope(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DataScopeType.SELF;
+        }
+        try {
+            return DataScopeType.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("角色数据范围取值非法，按 SELF（仅本人）处理: {}", raw);
+            return DataScopeType.SELF;
+        }
     }
 
     private Set<Long> projectVisibleEmployeeIds(Long managerEmployeeId) {
@@ -116,8 +134,7 @@ public class DataScopeService {
         if (team == null) {
             return false;
         }
-        String scope = user.getDataScope() == null ? DataScopeType.SELF.name() : user.getDataScope();
-        return switch (DataScopeType.valueOf(scope)) {
+        return switch (parseScope(user.getDataScope())) {
             case ALL, DEPARTMENT -> true;
             case PROJECT -> isProjectManager(user, team) || isActiveMember(user.getEmployeeId(), team.getId());
             case SELF -> isActiveMember(user.getEmployeeId(), team.getId());

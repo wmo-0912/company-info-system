@@ -57,6 +57,25 @@ class DataScopeServiceTest {
     }
 
     @Test
+    void unknownScopeFallsBackToSelfInsteadOfFailing() {
+        // 脏数据/历史角色写入的非法枚举值不能变成 500，按最小权限 SELF 处理
+        assertEquals(Set.of(5L), dataScopeService.visibleEmployeeIds(user("DEPARTMENT_X", 5L)));
+        assertEquals(Set.of(5L), dataScopeService.visibleEmployeeIds(user(null, 5L)));
+        assertNull(dataScopeService.visibleEmployeeIds(user(" all ", null)), "大小写与空格容错");
+    }
+
+    @Test
+    void unknownScopeProjectAccessFallsBackToSelf() {
+        ProjectTeam team = new ProjectTeam();
+        team.setId(100L);
+        team.setManagerEmployeeId(7L);
+        LoginUser outsider = user("SELF", 9L);
+        when(projectTeamMemberMapper.selectCount(any())).thenReturn(0L);
+
+        assertFalse(dataScopeService.canAccessProject(outsider, team));
+    }
+
+    @Test
     void projectScopeContainsMembersOfManagedTeams() {
         ProjectTeam team = new ProjectTeam();
         team.setId(100L);

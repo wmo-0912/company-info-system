@@ -12,9 +12,11 @@
         <template #default="{ row }">{{ dictLabel('dataScope', row.dataScope) }}</template>
       </el-table-column>
       <el-table-column prop="description" label="描述" show-overflow-tooltip />
-      <el-table-column label="状态" width="90">
+      <el-table-column label="状态" width="110">
         <template #default="{ row }">
-          <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+          <el-tag v-if="isBuiltIn(row.roleCode)" type="success">启用</el-tag>
+          <el-switch v-else :model-value="row.enabled" :loading="toggling === row.id"
+            @change="(val: any) => onToggleEnabled(row, !!val)" />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="180" fixed="right">
@@ -32,7 +34,8 @@
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑角色' : '新建角色'" width="480px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px">
         <el-form-item label="角色编码" prop="roleCode">
-          <el-input v-model="form.roleCode" />
+          <el-input v-model="form.roleCode" :disabled="!!editing && isBuiltIn(editing.roleCode)" />
+          <div v-if="editing && isBuiltIn(editing.roleCode)" class="form-hint">内置角色的编码不可修改</div>
         </el-form-item>
         <el-form-item label="角色名称" prop="roleName">
           <el-input v-model="form.roleName" />
@@ -66,13 +69,16 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { createRole, fetchPermissionTree, listRoles, saveRolePermissions, updateRole } from '@/api/role'
+import { createRole, fetchPermissionTree, listRoles, saveRolePermissions, setRoleEnabled, updateRole } from '@/api/role'
 import type { PermissionTreeNode, RoleVO } from '@/api/types'
 import { dictLabel, dictOptions } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const scopeOptions = dictOptions('dataScope')
+/** 内置角色：初始化时创建，被代码与菜单依赖，后端不允许停用或改编码 */
+const BUILT_IN_ROLES = ['ADMIN', 'HR', 'PROJECT_MANAGER', 'EMPLOYEE']
+const toggling = ref<number | null>(null)
 
 const records = ref<RoleVO[]>([])
 const loading = ref(false)
@@ -115,6 +121,21 @@ function openDialog(row?: RoleVO) {
     Object.assign(form, { roleCode: '', roleName: '', dataScope: 'SELF', description: '' })
   }
   dialogVisible.value = true
+}
+
+function isBuiltIn(code: string) {
+  return BUILT_IN_ROLES.includes(code)
+}
+
+async function onToggleEnabled(row: RoleVO, enabled: boolean) {
+  toggling.value = row.id
+  try {
+    await setRoleEnabled(row.id, enabled)
+    ElMessage.success(enabled ? '角色已启用' : '角色已停用，相关用户下次请求即失去该角色权限')
+    load()
+  } finally {
+    toggling.value = null
+  }
 }
 
 async function onSave() {
@@ -182,3 +203,11 @@ async function onSavePerms() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+</style>
