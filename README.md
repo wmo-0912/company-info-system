@@ -85,12 +85,7 @@ cd frontend; npm run type-check; npm run build
 
 以下账号由 `local` profile 的开发数据初始化器创建，数据库只存 BCrypt 哈希。**禁止在生产使用，生产启动时不会自动创建任何账号。**
 
-| 账号 | 密码 | 角色 | 数据范围 |
-|---|---|---|---|
-| `admin` | `Admin@123` | 管理员 | 全部（ALL） |
-| `hr` | `Hr@123456` | 人事 | 全部（ALL） |
-| `pm` | `Pm@123456` | 项目经理 | 负责项目组（PROJECT） |
-| `zhangsan` / `lisi` / `wangwu` | `Emp@123456` | 普通员工 | 仅本人（SELF） |
+完整清单（用户名、密码、角色、数据范围与管理建议）见 [docs/demo-accounts.md](docs/demo-accounts.md)。登录页不展示任何测试账号，避免向公网访客暴露默认口令。
 
 新用户的初始密码由管理员创建用户时设置并**线下交付**（系统无邮件/短信服务，不会自动发送通知）。
 
@@ -144,3 +139,5 @@ A：清空数据库后重启（local profile）即可重新初始化：`psql -U 
 ## 部署
 
 生产部署（Nginx 同源部署、环境变量、数据库备份等）见 [docs/deployment.md](docs/deployment.md)。
+
+阿里云轻量应用服务器（Ubuntu 镜像 + PostgreSQL 17）从选镜像到上线的完整流程见 [docs/deployment-alibaba-cloud.md](docs/deployment-alibaba-cloud.md)。
