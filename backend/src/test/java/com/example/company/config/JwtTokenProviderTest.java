@@ -21,7 +21,7 @@ class JwtTokenProviderTest {
 
     @Test
     void generateAndParseToken() {
-        String token = provider.generateToken(1L, "admin");
+        String token = provider.generateToken(1L, "admin", 0);
         Claims claims = provider.parse(token);
         assertNotNull(claims);
         assertEquals("1", claims.getSubject());
@@ -39,7 +39,7 @@ class JwtTokenProviderTest {
         ReflectionTestUtils.setField(other, "secret", "another-secret-key-another-secret-0123456789");
         ReflectionTestUtils.setField(other, "expirationMinutes", 120L);
         other.init();
-        String token = other.generateToken(1L, "admin");
+        String token = other.generateToken(1L, "admin", 0);
         assertNull(provider.parse(token));
     }
 

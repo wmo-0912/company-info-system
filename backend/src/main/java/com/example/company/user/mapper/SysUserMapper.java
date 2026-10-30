@@ -25,6 +25,14 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
             "WHERE id = #{userId} AND deleted = FALSE")
     int markLoginSuccess(@Param("userId") Long userId);
 
+    /**
+     * 提升会话版本：已签发的 JWT 里带着旧版本号，下一次请求即被过滤器拒绝。
+     * 这样改密与管理员重置无需额外存储（黑名单）就能让旧 token 失效。
+     */
+    @Update("UPDATE sys_user SET token_version = token_version + 1, updated_at = now() " +
+            "WHERE id = #{userId} AND deleted = FALSE")
+    int bumpTokenVersion(@Param("userId") Long userId);
+
     /** 管理员解锁 / 启用账号时清零失败计数 */
     @Update("UPDATE sys_user SET failed_login_count = 0, updated_at = now() " +
             "WHERE id = #{userId} AND deleted = FALSE")

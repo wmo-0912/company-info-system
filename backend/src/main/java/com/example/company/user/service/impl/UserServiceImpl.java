@@ -58,6 +58,7 @@ public class UserServiceImpl implements UserService {
         LoginUser loginUser = new LoginUser();
         loginUser.setUserId(user.getId());
         loginUser.setUsername(user.getUsername());
+        loginUser.setTokenVersion(user.getTokenVersion());
         loginUser.setEmployeeId(user.getEmployeeId());
 
         List<SysRole> roles = roleMapper.selectByUserId(user.getId());
@@ -126,7 +127,7 @@ public class UserServiceImpl implements UserService {
 
         LoginUser loginUser = buildLoginUser(user);
         LoginResponse response = new LoginResponse();
-        response.setToken(tokenProvider.generateToken(user.getId(), user.getUsername()));
+        response.setToken(tokenProvider.generateToken(user.getId(), user.getUsername(), user.getTokenVersion()));
         response.setExpiresAt(tokenProvider.expiresAt());
         response.setUser(toCurrentUserVO(loginUser));
         auditService.recordForActor(user.getId(), user.getUsername(), "auth:login", "user", user.getId(), true, "登录成功");
@@ -177,7 +178,9 @@ public class UserServiceImpl implements UserService {
         patch.setPasswordHash(passwordEncoder.encode(newPassword));
         patch.setMustChangePassword(false);
         userMapper.updateById(patch);
-        auditService.success("auth:change-password", "user", userId, "本人修改登录密码");
+        // 改密后让所有旧 token（含当前会话）失效，必须重新登录
+        userMapper.bumpTokenVersion(userId);
+        auditService.success("auth:change-password", "user", userId, "本人修改登录密码，所有旧会话已失效");
     }
 
     @Override
@@ -195,6 +198,8 @@ public class UserServiceImpl implements UserService {
         patch.setMustChangePassword(true);
         patch.setFailedLoginCount(0);
         userMapper.updateById(patch);
+        // 管理员重置后，被重置用户原有的登录会话立即失效
+        userMapper.bumpTokenVersion(userId);
         // 审计只记动作，绝不记录明文密码
         auditService.success("user:reset-password", "user", userId,
                 "管理员重置密码" + (StringUtils.hasText(newPassword) ? "（指定新密码）" : "（系统生成随机密码）"));

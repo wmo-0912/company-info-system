@@ -14,6 +14,7 @@ CREATE TABLE sys_user (
     must_change_password BOOLEAN    NOT NULL DEFAULT FALSE, -- 首次登录/管理员重置后强制改密
     last_login_at      TIMESTAMPTZ  NULL,
     failed_login_count INT          NOT NULL DEFAULT 0,
+    token_version      INT          NOT NULL DEFAULT 0, -- 会话版本：改密/重置/禁用时 +1，旧 token 立即失效
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted            BOOLEAN      NOT NULL DEFAULT FALSE

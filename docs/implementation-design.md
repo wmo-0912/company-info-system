@@ -344,6 +344,7 @@ npm run dev
 - `status VARCHAR(20) NOT NULL`：`ACTIVE` / `DISABLED` / `LOCKED`
 - `last_login_at TIMESTAMPTZ NULL`
 - `failed_login_count INT NOT NULL DEFAULT 0`
+- `token_version INT NOT NULL DEFAULT 0` —— 会话版本，改密/重置时 +1，旧 JWT 下一次请求即失效
 - `created_at`, `updated_at`, `deleted`
 
 密码必须由 BCrypt 编码，绝不返回密码哈希。

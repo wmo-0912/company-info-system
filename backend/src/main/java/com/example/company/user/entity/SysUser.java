@@ -27,6 +27,9 @@ public class SysUser {
 
     private Integer failedLoginCount;
 
+    /** 会话版本：密码修改/重置时自增，签发在旧版本上的 JWT 随即失效 */
+    private Integer tokenVersion;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

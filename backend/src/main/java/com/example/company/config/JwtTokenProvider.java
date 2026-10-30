@@ -38,12 +38,15 @@ public class JwtTokenProvider {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    public String generateToken(Long userId, String username) {
+    public static final String CLAIM_TOKEN_VERSION = "ver";
+
+    public String generateToken(Long userId, String username, Integer tokenVersion) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMinutes * 60_000);
         return Jwts.builder()
                 .subject(String.valueOf(userId))
                 .claim("username", username)
+                .claim(CLAIM_TOKEN_VERSION, tokenVersion == null ? 0 : tokenVersion)
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(key)

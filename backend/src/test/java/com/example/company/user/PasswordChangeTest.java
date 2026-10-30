@@ -83,6 +83,8 @@ class PasswordChangeTest {
         assertFalse(patch.getMustChangePassword(), "改密成功后必须清除强制改密标记");
         assertNull(patch.getLastLoginAt(), "补丁对象不应覆盖登录时间等无关列");
         verify(auditService).success(eq("auth:change-password"), eq("user"), eq(9L), anyString());
+        // 改密后旧 token 必须立即失效：会话版本自增
+        verify(userMapper).bumpTokenVersion(9L);
     }
 
     @Test
@@ -110,5 +112,7 @@ class PasswordChangeTest {
         // 审计摘要不得包含明文密码
         verify(auditService).success(eq("user:reset-password"), eq("user"), eq(9L),
                 argThat(s -> s != null && !s.contains(generated)));
+        // 管理员重置后，被重置用户的既有会话必须失效
+        verify(userMapper).bumpTokenVersion(9L);
     }
 }

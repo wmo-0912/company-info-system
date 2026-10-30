@@ -8,6 +8,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -20,6 +21,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.OffsetDateTime;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -38,7 +40,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 try {
                     Long userId = Long.valueOf(claims.getSubject());
                     LoginUser loginUser = userService.loadLoginUser(userId);
-                    if (loginUser != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                    if (loginUser != null && !sameTokenVersion(claims, loginUser)) {
+                        // 密码已修改/被重置后，旧 token 立即作废（无需维护黑名单）
+                        log.debug("JWT 版本不匹配，按未认证处理：userId={}", userId);
+                    }
+                    if (loginUser != null && sameTokenVersion(claims, loginUser)
+                            && SecurityContextHolder.getContext().getAuthentication() == null) {
                         var authorities = loginUser.getPermissions().stream()
                                 .map(SimpleGrantedAuthority::new)
                                 .toList();
@@ -58,6 +65,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         chain.doFilter(request, response);
+    }
+
+    /** token 里没有 ver 声明时按 0 处理（兼容升级前签发、尚未过期的 token） */
+    private boolean sameTokenVersion(Claims claims, LoginUser loginUser) {
+        Integer claimed = claims.get(JwtTokenProvider.CLAIM_TOKEN_VERSION, Integer.class);
+        Integer current = loginUser.getTokenVersion();
+        return (claimed == null ? 0 : claimed) == (current == null ? 0 : current);
     }
 
     private boolean isPasswordChangeFlow(HttpServletRequest request) {

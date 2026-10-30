@@ -127,7 +127,7 @@ class LoginLockoutTest {
         when(passwordEncoder.matches(eq("right"), anyString())).thenReturn(true);
         when(roleMapper.selectByUserId(7L)).thenReturn(List.of());
         when(permissionMapper.selectByUserId(7L)).thenReturn(List.of());
-        when(tokenProvider.generateToken(7L, "zhangsan")).thenReturn("signed-token");
+        when(tokenProvider.generateToken(eq(7L), eq("zhangsan"), any())).thenReturn("signed-token");
         when(tokenProvider.expiresAt()).thenReturn(OffsetDateTime.now().plusHours(2));
 
         LoginResponse response = userService.login(request("right"));
