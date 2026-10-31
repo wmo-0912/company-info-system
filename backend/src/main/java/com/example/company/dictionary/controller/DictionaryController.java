@@ -46,6 +46,31 @@ public class DictionaryController {
         return ApiResponse.ok(dictionaryService.createType(request));
     }
 
+    @Operation(summary = "修改字典类型（编码不可改）")
+    @PutMapping("/dictionaries/{id}")
+    @PreAuthorize("hasAuthority('dictionary:manage')")
+    public ApiResponse<DictionaryType> updateType(@PathVariable Long id,
+                                                  @Valid @RequestBody DictionaryTypeRequest request) {
+        return ApiResponse.ok(dictionaryService.updateType(id, request));
+    }
+
+    @Operation(summary = "启用/停用字典类型")
+    @PatchMapping("/dictionaries/{id}/status")
+    @PreAuthorize("hasAuthority('dictionary:manage')")
+    public ApiResponse<Void> changeTypeStatus(@PathVariable Long id,
+                                              @Valid @RequestBody EnabledRequest request) {
+        dictionaryService.changeTypeStatus(id, request.getEnabled());
+        return ApiResponse.ok();
+    }
+
+    @Operation(summary = "删除字典类型（有字典项或属于内置字典时拒绝）")
+    @DeleteMapping("/dictionaries/{id}")
+    @PreAuthorize("hasAuthority('dictionary:manage')")
+    public ApiResponse<Void> deleteType(@PathVariable Long id) {
+        dictionaryService.deleteType(id);
+        return ApiResponse.ok();
+    }
+
     @Operation(summary = "创建字典项")
     @PostMapping("/dictionaries/{dictCode}/items")
     @PreAuthorize("hasAuthority('dictionary:manage')")
@@ -68,6 +93,14 @@ public class DictionaryController {
     public ApiResponse<Void> changeItemStatus(@PathVariable Long id,
                                               @Valid @RequestBody EnabledRequest request) {
         dictionaryService.changeItemStatus(id, request.getEnabled());
+        return ApiResponse.ok();
+    }
+
+    @Operation(summary = "删除字典项（已被员工档案引用时拒绝）")
+    @DeleteMapping("/dictionary-items/{id}")
+    @PreAuthorize("hasAuthority('dictionary:manage')")
+    public ApiResponse<Void> deleteItem(@PathVariable Long id) {
+        dictionaryService.deleteItem(id);
         return ApiResponse.ok();
     }
 

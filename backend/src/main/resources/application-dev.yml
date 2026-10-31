@@ -1,0 +1,7 @@
+# 开发联调配置（不含任何密钥，可入库）
+# 激活方式：--spring.profiles.active=dev，或与本地 local profile 叠加：local,dev
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

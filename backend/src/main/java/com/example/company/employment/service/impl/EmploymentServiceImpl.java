@@ -1,8 +1,11 @@
 package com.example.company.employment.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
+import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.ChangeType;
 import com.example.company.common.enums.EmployeeStatus;
@@ -13,6 +16,7 @@ import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.employment.dto.ChangeRequestCreateDTO;
@@ -24,15 +28,21 @@ import com.example.company.employment.mapper.EmployeeEmploymentRecordMapper;
 import com.example.company.employment.service.EmploymentService;
 import com.example.company.employment.vo.ChangeRequestVO;
 import com.example.company.employment.vo.EmploymentRecordVO;
+import com.example.company.project.entity.ProjectTeamMember;
+import com.example.company.project.mapper.ProjectTeamMemberMapper;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.AccountProvisioningService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
@@ -45,20 +55,25 @@ public class EmploymentServiceImpl implements EmploymentService {
     private final EmployeeEmploymentRecordMapper recordMapper;
     private final EmployeeMapper employeeMapper;
     private final DepartmentMapper departmentMapper;
+    private final ProjectTeamMemberMapper projectMemberMapper;
     private final SysUserMapper userMapper;
     private final DataScopeService dataScopeService;
     private final AuditService auditService;
+    private final DictionaryService dictionaryService;
+    private final AccountProvisioningService accountProvisioningService;
 
     @Override
     public PageResponse<ChangeRequestVO> page(int page, int pageSize, String status, String changeType, Long employeeId) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.EMPLOYMENT);
         if (visible != null && visible.isEmpty()) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }
         QueryWrapper<EmployeeChangeRequest> qw = new QueryWrapper<>();
         if (visible != null) {
-            qw.in("employee_id", visible);
+            // 尚未建档的入职申请没有 employee_id，只有申请人自己能在列表里看到它
+            Long me = SecurityUtils.getCurrentUserId();
+            qw.and(w -> w.in("employee_id", visible).or().isNull("employee_id").eq("submitted_by", me));
         }
         if (StringUtils.hasText(status)) {
             qw.eq("status", status);
@@ -77,38 +92,53 @@ public class EmploymentServiceImpl implements EmploymentService {
     @Override
     public ChangeRequestVO detail(Long id) {
         EmployeeChangeRequest req = requireRequest(id);
-        assertEmployeeVisible(req.getEmployeeId());
+        assertRequestVisible(req);
         return toVO(req);
     }
 
+    /**
+     * 创建申请。不使用事务包装：申请号在高并发下仍可能撞唯一键，重试需要每条 insert 各自独立提交
+     * （PostgreSQL 同一事务里一旦违反唯一约束就会进入 aborted 状态，同事务重试必然继续失败）。
+     */
     @Override
-    @Transactional
     public ChangeRequestVO create(ChangeRequestCreateDTO dto) {
         ChangeType changeType = parseChangeType(dto.getChangeType());
-        Employee employee = requireEmployee(dto.getEmployeeId());
-        validateRequestForEmployee(changeType, employee, dto);
-
-        // 同一员工不允许存在进行中的同类型请求
-        Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
-                .eq("employee_id", employee.getId())
-                .eq("change_type", changeType.name())
-                .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name()));
-        if (inFlight > 0) {
-            throw BusinessException.conflict("该员工存在进行中的同类型申请");
+        Employee employee = dto.getEmployeeId() == null ? null : requireEmployee(dto.getEmployeeId());
+        if (employee == null) {
+            // 入职申请可以不选员工：新员工由流程建档，批准时才落库并开通账号
+            if (changeType != ChangeType.ONBOARD) {
+                throw BusinessException.badRequest("仅入职（ONBOARD）申请可以不指定员工，其余类型必须选择员工");
+            }
+            validatePayload(changeType, dto.getPayload());
+            String employeeNo = assertHirePayloadComplete(dto.getPayload());
+            assertNoInFlightOnboarding(employeeNo);
+        } else {
+            validateRequestForEmployee(changeType, employee, dto);
+            // 同一员工不允许存在进行中的同类型请求
+            Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
+                    .eq("employee_id", employee.getId())
+                    .eq("change_type", changeType.name())
+                    .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name()));
+            if (inFlight > 0) {
+                throw BusinessException.conflict("该员工存在进行中的同类型申请");
+            }
         }
 
         EmployeeChangeRequest req = new EmployeeChangeRequest();
-        req.setRequestNo(generateRequestNo());
-        req.setEmployeeId(employee.getId());
+        req.setEmployeeId(employee == null ? null : employee.getId());
         req.setChangeType(changeType.name());
         req.setStatus(RequestStatus.DRAFT.name());
         req.setEffectiveDate(dto.getEffectiveDate());
         req.setReason(dto.getReason());
-        req.setPayload(dto.getPayload() == null ? Map.of() : dto.getPayload());
+        // 复制一份：调用方传进来的可能是不可变 Map，批准阶段还要往里写 snapshot
+        req.setPayload(dto.getPayload() == null ? new HashMap<>() : new HashMap<>(dto.getPayload()));
         req.setSubmittedBy(SecurityUtils.getCurrentUserId());
-        requestMapper.insert(req);
+        insertWithUniqueRequestNo(req);
         auditService.success("employment:create", "change_request", req.getId(),
-                "创建" + changeType.name() + "申请，员工ID=" + employee.getId());
+                "创建" + changeType.name() + "申请，"
+                        + (employee == null
+                        ? "新员工工号=" + req.getPayload().get("employeeNo")
+                        : "员工ID=" + employee.getId()));
         return toVO(req);
     }
 
@@ -137,6 +167,10 @@ public class EmploymentServiceImpl implements EmploymentService {
             throw BusinessException.badRequest("处理决定必须是 APPROVE 或 REJECT");
         }
 
+        LoginUser current = SecurityUtils.getCurrentUser();
+        if (current.getEmployeeId() != null && current.getEmployeeId().equals(req.getEmployeeId())) {
+            throw BusinessException.forbidden("不能办理与本人相关的入转调离申请，请由其他有权限的同事办理");
+        }
         Long processorId = SecurityUtils.getCurrentUserId();
         req.setProcessedBy(processorId);
         req.setProcessedAt(OffsetDateTime.now());
@@ -149,10 +183,40 @@ public class EmploymentServiceImpl implements EmploymentService {
             return toVO(req);
         }
 
+        // 批准的生效日期必须已到：未到期就改主档会让"提前生效"变成既成事实，无法回滚
+        if (req.getEffectiveDate() != null && req.getEffectiveDate().isAfter(LocalDate.now())) {
+            throw BusinessException.unprocessable("生效日期 " + req.getEffectiveDate()
+                    + " 尚未到达，请在当天或之后办理；如需变更请驳回归还申请人修改");
+        }
+
         // 批准：事务内更新员工主档 + 写入任职历史 + 更新申请状态
-        Employee employee = requireEmployee(req.getEmployeeId());
+        Employee employee;
+        String onboardDetail;
+        if (req.getEmployeeId() == null) {
+            // 流程建档：申请里只有新员工信息，批准这一刻才真正创建档案并回填关联
+            if (!ChangeType.ONBOARD.name().equals(req.getChangeType())) {
+                throw BusinessException.unprocessable("申请缺少员工信息，无法办理");
+            }
+            employee = createPendingEmployee(req);
+            req.setEmployeeId(employee.getId());
+            onboardDetail = "新建员工档案 " + employee.getEmployeeNo();
+        } else {
+            employee = requireEmployee(req.getEmployeeId());
+            onboardDetail = null;
+        }
+        // 主档更新前取快照，批准后据此生成字段级变更（部门/岗位/状态/日期）
+        AuditDiff.Snapshot before = AuditDiff.snapshot(employee);
         applyApproval(req, employee);
         employeeMapper.updateById(employee);
+        String resignDetail = ChangeType.RESIGN.name().equals(req.getChangeType())
+                ? cascadeResignation(employee, req.getEffectiveDate())
+                : null;
+        String accountDetail = null;
+        if (ChangeType.ONBOARD.name().equals(req.getChangeType())) {
+            // 入职批准后自动开通账号：用户名=工号，初始密码不回响应，管理员用「重置密码」线下交付
+            AccountProvisioningService.Result account = accountProvisioningService.provision(employee);
+            accountDetail = account == null ? null : account.detail();
+        }
 
         EmployeeEmploymentRecord record = new EmployeeEmploymentRecord();
         record.setEmployeeId(employee.getId());
@@ -165,7 +229,13 @@ public class EmploymentServiceImpl implements EmploymentService {
 
         req.setStatus(RequestStatus.APPROVED.name());
         requestMapper.updateById(req);
-        auditService.success("employment:approve", "change_request", id, "批准申请 " + req.getRequestNo());
+        String employeeDiff = AuditDiff.describe(before, employee, this::formatAuditValue);
+        auditService.success("employment:approve", "change_request", id,
+                "批准申请 " + req.getRequestNo()
+                        + (onboardDetail == null ? "" : "；" + onboardDetail)
+                        + (employeeDiff.isEmpty() ? "" : "；" + employeeDiff)
+                        + (resignDetail == null ? "" : "；" + resignDetail)
+                        + (accountDetail == null ? "" : "；" + accountDetail));
         return toVO(req);
     }
 
@@ -200,7 +270,7 @@ public class EmploymentServiceImpl implements EmploymentService {
         List<EmployeeEmploymentRecord> records = recordMapper.selectList(new QueryWrapper<EmployeeEmploymentRecord>()
                 .eq("employee_id", employeeId)
                 .orderByDesc("effective_date"));
-        return records.stream().map(this::toRecordVO).toList();
+        return toRecordVOs(records);
     }
 
     @Override
@@ -210,13 +280,55 @@ public class EmploymentServiceImpl implements EmploymentService {
                 new QueryWrapper<EmployeeChangeRequest>()
                         .eq("employee_id", employeeId)
                         .orderByDesc("created_at"));
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     // ==================== 内部规则 ====================
 
+    /** 在职（可调岗、可离职）的两种状态：试用期与正式 */
+    private boolean isEmployed(String status) {
+        return EmployeeStatus.PROBATION.name().equals(status) || EmployeeStatus.REGULAR.name().equals(status);
+    }
+
+    /** 申请附加信息只允许这些键（其余一律拒绝，避免脏键静默写进 JSONB） */
+    private static final Set<String> TRANSFER_PAYLOAD_KEYS = Set.of("targetDepartmentId", "targetPositionName");
+    /** 批准时回写的内部键，校验时放行 */
+    private static final Set<String> INTERNAL_PAYLOAD_KEYS = Set.of("snapshot");
+    private static final int MAX_POSITION_NAME_LENGTH = 100;
+
+    /**
+     * payload 是 JSONB，没有 schema 约束；这里按申请类型做白名单与取值校验，
+     * 避免"前端漏传/传错键"变成一条看起来正常、实际什么都没改的申请。
+     */
+    private void validatePayload(ChangeType type, Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        Set<String> allowed = switch (type) {
+            case TRANSFER -> TRANSFER_PAYLOAD_KEYS;
+            case ONBOARD -> ONBOARD_HIRE_KEYS;
+            default -> Set.of();
+        };
+        for (String key : payload.keySet()) {
+            if (INTERNAL_PAYLOAD_KEYS.contains(key)) {
+                continue;
+            }
+            if (!allowed.contains(key)) {
+                throw BusinessException.badRequest("申请附加信息包含不支持的字段：" + key);
+            }
+        }
+        Object targetPosition = payload.get("targetPositionName");
+        if (targetPosition != null) {
+            String name = String.valueOf(targetPosition).trim();
+            if (name.isEmpty() || name.length() > MAX_POSITION_NAME_LENGTH) {
+                throw BusinessException.badRequest("目标岗位名称不能为空且不超过 " + MAX_POSITION_NAME_LENGTH + " 个字符");
+            }
+        }
+    }
+
     private void validateRequestForEmployee(ChangeType type, Employee employee, ChangeRequestCreateDTO dto) {
         String status = employee.getEmploymentStatus();
+        validatePayload(type, dto.getPayload());
         switch (type) {
             case ONBOARD -> {
                 if (!EmployeeStatus.PENDING.name().equals(status)) {
@@ -229,8 +341,7 @@ public class EmploymentServiceImpl implements EmploymentService {
                 }
             }
             case TRANSFER -> {
-                if (!Set.of(EmployeeStatus.PROBATION.name(), EmployeeStatus.REGULAR.name(),
-                        EmployeeStatus.TRANSFERRED.name()).contains(status)) {
+                if (!isEmployed(status)) {
                     throw BusinessException.unprocessable("当前员工状态不允许调岗");
                 }
                 Long targetDeptId = extractTargetDepartmentId(dto);
@@ -246,8 +357,7 @@ public class EmploymentServiceImpl implements EmploymentService {
                 }
             }
             case RESIGN -> {
-                if (!Set.of(EmployeeStatus.PROBATION.name(), EmployeeStatus.REGULAR.name(),
-                        EmployeeStatus.TRANSFERRED.name()).contains(status)) {
+                if (!isEmployed(status)) {
                     throw BusinessException.unprocessable("当前员工状态不允许办理离职");
                 }
                 if (dto.getEffectiveDate().isBefore(java.time.LocalDate.now().minusYears(5))) {
@@ -279,7 +389,8 @@ public class EmploymentServiceImpl implements EmploymentService {
                 if (targetPos != null && StringUtils.hasText(String.valueOf(targetPos))) {
                     employee.setPositionName(String.valueOf(targetPos));
                 }
-                employee.setEmploymentStatus(EmployeeStatus.TRANSFERRED.name());
+                // 调岗只改部门与岗位，在职状态保持不变：试用期调岗仍是 PROBATION，转正后调岗仍是 REGULAR，
+                // 否则"已调岗"这种一次性事件会被写成终身状态，后续转正/离职判断全部失效。
             }
             case RESIGN -> {
                 employee.setEmploymentStatus(EmployeeStatus.RESIGNED.name());
@@ -287,6 +398,172 @@ public class EmploymentServiceImpl implements EmploymentService {
             }
         }
         req.getPayload().put("snapshot", snapshot);
+    }
+
+    /** 审计变更的可读化：部门与直属主管显示名称而不是内部 ID */
+    private String formatAuditValue(String field, Object value) {
+        if ("departmentId".equals(field)) {
+            Department dept = departmentMapper.selectById((Long) value);
+            return dept == null ? null : dept.getDepartmentName();
+        }
+        if ("managerEmployeeId".equals(field)) {
+            Employee manager = employeeMapper.selectById((Long) value);
+            return manager == null ? null : manager.getEmployeeName();
+        }
+        return null;
+    }
+
+    /**
+     * 离职批准后的级联收尾（与主档更新同一事务）：
+     * 1. 停用该员工关联的登录账号——JWT 过滤器每次请求都会重新加载账号状态，停用后旧 token 立即失效；
+     * 2. 结束进行中的项目组成员关系（写 left_at），避免数据范围仍把离职者算作有效成员；
+     * 3. 清空指向该员工的部门负责人引用，避免"幽灵负责人"。
+     *
+     * @return 供审计记录使用的摘要
+     */
+    private String cascadeResignation(Employee employee, LocalDate effectiveDate) {
+        LocalDate leftAt = effectiveDate == null ? LocalDate.now() : effectiveDate;
+        int disabledUsers = userMapper.update(null, new UpdateWrapper<SysUser>()
+                .set("status", "DISABLED")
+                .eq("employee_id", employee.getId())
+                .eq("status", "ACTIVE"));
+        int closedMemberships = projectMemberMapper.update(null, new UpdateWrapper<ProjectTeamMember>()
+                .set("left_at", leftAt)
+                .eq("employee_id", employee.getId())
+                .isNull("left_at"));
+        int clearedManagers = departmentMapper.update(null, new UpdateWrapper<Department>()
+                .setSql("manager_employee_id = NULL")
+                .eq("manager_employee_id", employee.getId()));
+        return "停用账号 " + disabledUsers + " 个、结束项目组成员关系 " + closedMemberships
+                + " 个、清理部门负责人 " + clearedManagers + " 处";
+    }
+
+    // ==================== 入职流程建档 ====================
+
+    /** 入职申请可携带的新员工字段（其余键一律拒绝，避免脏数据静默写库） */
+    private static final Set<String> ONBOARD_HIRE_KEYS = Set.of(
+            "employeeNo", "employeeName", "gender", "birthDate", "phone", "email",
+            "departmentId", "positionName", "positionLevelCode", "educationCode");
+    private static final int MAX_EMPLOYEE_NO_LENGTH = 32;
+    private static final int MAX_EMPLOYEE_NAME_LENGTH = 100;
+
+    /** 校验新员工必备字段，返回工号 */
+    private String assertHirePayloadComplete(Map<String, Object> payload) {
+        String employeeNo = textOf(payload, "employeeNo");
+        if (employeeNo == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供工号 employeeNo");
+        }
+        if (employeeNo.length() > MAX_EMPLOYEE_NO_LENGTH) {
+            throw BusinessException.badRequest("工号不能超过 " + MAX_EMPLOYEE_NO_LENGTH + " 个字符");
+        }
+        String employeeName = textOf(payload, "employeeName");
+        if (employeeName == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供姓名 employeeName");
+        }
+        if (employeeName.length() > MAX_EMPLOYEE_NAME_LENGTH) {
+            throw BusinessException.badRequest("姓名不能超过 " + MAX_EMPLOYEE_NAME_LENGTH + " 个字符");
+        }
+        if (departmentIdOf(payload) == null) {
+            throw BusinessException.badRequest("新员工入职申请必须提供部门 departmentId");
+        }
+        // 学历/职级/性别与档案编辑同口径：必须取自启用状态的字典项
+        dictionaryService.validateDictionaryItem("EDUCATION", textOf(payload, "educationCode"), "学历");
+        dictionaryService.validateDictionaryItem("POSITION_LEVEL", textOf(payload, "positionLevelCode"), "职位层级");
+        dictionaryService.validateDictionaryItem("GENDER", textOf(payload, "gender"), "性别");
+        String birthDate = textOf(payload, "birthDate");
+        if (birthDate != null) {
+            parseDate(birthDate);
+        }
+        if (employeeMapper.selectCount(new QueryWrapper<Employee>().eq("employee_no", employeeNo)) > 0) {
+            throw BusinessException.conflict("工号已存在: " + employeeNo);
+        }
+        return employeeNo;
+    }
+
+    /** 同一工号不允许有进行中的入职申请（员工还没建档，只能按 payload 里的工号判重） */
+    private void assertNoInFlightOnboarding(String employeeNo) {
+        Long inFlight = requestMapper.selectCount(new QueryWrapper<EmployeeChangeRequest>()
+                .eq("change_type", ChangeType.ONBOARD.name())
+                .in("status", RequestStatus.DRAFT.name(), RequestStatus.SUBMITTED.name())
+                .apply("payload ->> 'employeeNo' = {0}", employeeNo));
+        if (inFlight != null && inFlight > 0) {
+            throw BusinessException.conflict("工号 " + employeeNo + " 存在进行中的入职申请");
+        }
+    }
+
+    /** 按申请里的新员工信息建档（PENDING），随后由 applyApproval 转成试用期并写入任职历史 */
+    private Employee createPendingEmployee(EmployeeChangeRequest req) {
+        Map<String, Object> payload = req.getPayload();
+        String employeeNo = assertHirePayloadComplete(payload);
+        Employee employee = new Employee();
+        employee.setEmployeeNo(employeeNo);
+        employee.setEmployeeName(textOf(payload, "employeeName"));
+        employee.setGender(textOf(payload, "gender"));
+        String birthDate = textOf(payload, "birthDate");
+        employee.setBirthDate(birthDate == null ? null : parseDate(birthDate));
+        employee.setPhone(textOf(payload, "phone"));
+        employee.setEmail(textOf(payload, "email"));
+        employee.setDepartmentId(departmentIdOf(payload));
+        employee.setPositionName(textOf(payload, "positionName"));
+        employee.setPositionLevelCode(textOf(payload, "positionLevelCode"));
+        employee.setEducationCode(textOf(payload, "educationCode"));
+        employee.setEmploymentStatus(EmployeeStatus.PENDING.name());
+        employee.setHireDate(req.getEffectiveDate());
+        employeeMapper.insert(employee);
+        return employee;
+    }
+
+    private String textOf(Map<String, Object> payload, String key) {
+        if (payload == null) {
+            return null;
+        }
+        Object value = payload.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private Long departmentIdOf(Map<String, Object> payload) {
+        String raw = textOf(payload, "departmentId");
+        if (raw == null) {
+            return null;
+        }
+        Long departmentId;
+        try {
+            departmentId = Long.valueOf(raw);
+        } catch (NumberFormatException e) {
+            throw BusinessException.badRequest("部门 ID 格式不正确");
+        }
+        Department dept = departmentMapper.selectById(departmentId);
+        if (dept == null || !"ACTIVE".equals(dept.getStatus())) {
+            throw BusinessException.badRequest("部门不存在或已停用");
+        }
+        return departmentId;
+    }
+
+    private LocalDate parseDate(String raw) {
+        try {
+            return LocalDate.parse(raw, DateTimeFormatter.ISO_LOCAL_DATE);
+        } catch (DateTimeParseException e) {
+            throw BusinessException.badRequest("出生日期格式不正确，应为 yyyy-MM-dd");
+        }
+    }
+
+    /** 申请可见性：已建档的按数据范围，尚未建档的只有申请人本人或全量数据范围可见 */
+    private void assertRequestVisible(EmployeeChangeRequest req) {
+        if (req.getEmployeeId() != null) {
+            assertEmployeeVisible(req.getEmployeeId());
+            return;
+        }
+        Long me = SecurityUtils.getCurrentUserId();
+        if (me != null && me.equals(req.getSubmittedBy())) {
+            return;
+        }
+        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), null, DataModule.EMPLOYMENT)) {
+            throw BusinessException.forbidden("无权访问该申请");
+        }
     }
 
     private ChangeRequestCreateDTO toDTO(EmployeeChangeRequest req) {
@@ -315,7 +592,7 @@ public class EmploymentServiceImpl implements EmploymentService {
     }
 
     private void assertEmployeeVisible(Long employeeId) {
-        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), employeeId)) {
+        if (!dataScopeService.canAccessEmployee(SecurityUtils.getCurrentUser(), employeeId, DataModule.EMPLOYMENT)) {
             throw BusinessException.forbidden("无权访问该员工相关数据");
         }
     }
@@ -344,17 +621,74 @@ public class EmploymentServiceImpl implements EmploymentService {
         }
     }
 
+    /**
+     * 申请号：CR + 毫秒级时间戳 + 6 位随机数，共 23 字符（列宽 40）。
+     * 毫秒 + 6 位随机把同毫秒碰撞概率压到百万分之一以下，仍保留唯一键兜底并配合重试。
+     */
     private String generateRequestNo() {
-        return "CR" + OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-                + String.format("%04d", ThreadLocalRandom.current().nextInt(10000));
+        return "CR" + OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
+                + String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
+    }
+
+    private static final int REQUEST_NO_ATTEMPTS = 3;
+
+    /** 插入申请，唯一键冲突（申请号重复）时重新取号重试，最多 {@value #REQUEST_NO_ATTEMPTS} 次 */
+    private void insertWithUniqueRequestNo(EmployeeChangeRequest req) {
+        for (int attempt = 1; ; attempt++) {
+            req.setRequestNo(generateRequestNo());
+            try {
+                requestMapper.insert(req);
+                return;
+            } catch (DuplicateKeyException e) {
+                if (attempt >= REQUEST_NO_ATTEMPTS) {
+                    throw BusinessException.conflict("申请号生成冲突，请稍后重试");
+                }
+                req.setId(null);
+            }
+        }
+    }
+
+    /** 批量组装：员工与提交/处理人姓名一次查回，避免逐行查询（列表页 N+1） */
+    private List<ChangeRequestVO> toVOs(List<EmployeeChangeRequest> requests) {
+        if (requests.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = new LinkedHashSet<>();
+        Set<Long> userIds = new LinkedHashSet<>();
+        for (EmployeeChangeRequest req : requests) {
+            if (req.getEmployeeId() != null) {
+                employeeIds.add(req.getEmployeeId());
+            }
+            if (req.getSubmittedBy() != null) {
+                userIds.add(req.getSubmittedBy());
+            }
+            if (req.getProcessedBy() != null) {
+                userIds.add(req.getProcessedBy());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, e -> e));
+        Map<Long, String> userNames = userIds.isEmpty() ? Map.of()
+                : userMapper.selectBatchIds(userIds).stream()
+                        .collect(Collectors.toMap(SysUser::getId, SysUser::getUsername));
+        List<ChangeRequestVO> list = new ArrayList<>(requests.size());
+        for (EmployeeChangeRequest req : requests) {
+            list.add(buildVO(req, employees.get(req.getEmployeeId()), userNames));
+        }
+        return list;
     }
 
     private ChangeRequestVO toVO(EmployeeChangeRequest req) {
+        Employee employee = req.getEmployeeId() == null ? null : employeeMapper.selectById(req.getEmployeeId());
+        return buildVO(req, employee, null);
+    }
+
+    private ChangeRequestVO buildVO(EmployeeChangeRequest req, Employee employee, Map<Long, String> userNames) {
         ChangeRequestVO vo = new ChangeRequestVO();
         vo.setId(req.getId());
         vo.setRequestNo(req.getRequestNo());
         vo.setEmployeeId(req.getEmployeeId());
-        Employee employee = employeeMapper.selectById(req.getEmployeeId());
         if (employee != null) {
             vo.setEmployeeName(employee.getEmployeeName());
             vo.setEmployeeNo(employee.getEmployeeNo());
@@ -365,43 +699,88 @@ public class EmploymentServiceImpl implements EmploymentService {
         vo.setPayload(req.getPayload());
         vo.setReason(req.getReason());
         vo.setSubmittedBy(req.getSubmittedBy());
-        vo.setSubmittedByName(userName(req.getSubmittedBy()));
+        vo.setSubmittedByName(userName(userNames, req.getSubmittedBy()));
         vo.setProcessedBy(req.getProcessedBy());
-        vo.setProcessedByName(userName(req.getProcessedBy()));
+        vo.setProcessedByName(userName(userNames, req.getProcessedBy()));
         vo.setProcessedAt(req.getProcessedAt());
         vo.setProcessComment(req.getProcessComment());
         vo.setCreatedAt(req.getCreatedAt());
         return vo;
     }
 
-    private String userName(Long userId) {
+    /** userNames 为 null 表示单行场景，直接查库；列表场景传入批量的 Map */
+    private String userName(Map<Long, String> userNames, Long userId) {
         if (userId == null) {
             return null;
+        }
+        if (userNames != null) {
+            return userNames.get(userId);
         }
         SysUser user = userMapper.selectById(userId);
         return user == null ? null : user.getUsername();
     }
 
+    /** 批量组装任职记录：新旧部门与操作人姓名一次查回 */
+    private List<EmploymentRecordVO> toRecordVOs(List<EmployeeEmploymentRecord> records) {
+        if (records.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> deptIds = new LinkedHashSet<>();
+        Set<Long> userIds = new LinkedHashSet<>();
+        for (EmployeeEmploymentRecord r : records) {
+            if (r.getOldDepartmentId() != null) {
+                deptIds.add(r.getOldDepartmentId());
+            }
+            if (r.getNewDepartmentId() != null) {
+                deptIds.add(r.getNewDepartmentId());
+            }
+            if (r.getOperatorUserId() != null) {
+                userIds.add(r.getOperatorUserId());
+            }
+        }
+        Map<Long, Department> departments = deptIds.isEmpty() ? Map.of()
+                : departmentMapper.selectBatchIds(deptIds).stream()
+                        .collect(Collectors.toMap(Department::getId, d -> d));
+        Map<Long, String> userNames = userIds.isEmpty() ? Map.of()
+                : userMapper.selectBatchIds(userIds).stream()
+                        .collect(Collectors.toMap(SysUser::getId, SysUser::getUsername));
+        List<EmploymentRecordVO> list = new ArrayList<>(records.size());
+        for (EmployeeEmploymentRecord r : records) {
+            list.add(buildRecordVO(r, departments, userNames));
+        }
+        return list;
+    }
+
     private EmploymentRecordVO toRecordVO(EmployeeEmploymentRecord r) {
+        return buildRecordVO(r, null, null);
+    }
+
+    private EmploymentRecordVO buildRecordVO(EmployeeEmploymentRecord r, Map<Long, Department> departments,
+                                             Map<Long, String> userNames) {
         EmploymentRecordVO vo = new EmploymentRecordVO();
         vo.setId(r.getId());
         vo.setEmployeeId(r.getEmployeeId());
         vo.setChangeType(r.getChangeType());
         vo.setEffectiveDate(r.getEffectiveDate());
         vo.setOldDepartmentId(r.getOldDepartmentId());
-        vo.setOldDepartmentName(deptName(r.getOldDepartmentId()));
+        vo.setOldDepartmentName(deptName(departments, r.getOldDepartmentId()));
         vo.setNewDepartmentId(r.getNewDepartmentId());
-        vo.setNewDepartmentName(deptName(r.getNewDepartmentId()));
+        vo.setNewDepartmentName(deptName(departments, r.getNewDepartmentId()));
         vo.setOldPositionName(r.getOldPositionName());
         vo.setNewPositionName(r.getNewPositionName());
         vo.setReason(r.getReason());
-        vo.setOperatorName(userName(r.getOperatorUserId()));
+        vo.setOperatorName(userName(userNames, r.getOperatorUserId()));
         return vo;
     }
 
-    private String deptName(Long deptId) {
+    /** departments 为 null 表示单行场景，直接查库 */
+    private String deptName(Map<Long, Department> departments, Long deptId) {
         if (deptId == null) {
             return null;
+        }
+        if (departments != null) {
+            Department dept = departments.get(deptId);
+            return dept == null ? null : dept.getDepartmentName();
         }
         Department dept = departmentMapper.selectById(deptId);
         return dept == null ? null : dept.getDepartmentName();

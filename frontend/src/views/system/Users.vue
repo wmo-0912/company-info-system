@@ -29,7 +29,7 @@
       <el-table-column label="最后登录" width="170">
         <template #default="{ row }">{{ formatTime(row.lastLoginAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <el-button v-if="auth.has('user:disable') && row.status !== 'ACTIVE'" link type="success"
             @click="onStatus(row, 'ACTIVE')">启用</el-button>
@@ -37,6 +37,7 @@
             @click="onStatus(row, 'DISABLED')">停用</el-button>
           <el-button v-if="auth.has('user:disable') && row.status !== 'LOCKED'" link type="danger"
             @click="onStatus(row, 'LOCKED')">锁定</el-button>
+          <el-button v-if="auth.has('user:disable')" link type="danger" @click="openReset(row)">重置密码</el-button>
           <el-button v-if="auth.has('user:update')" link type="primary" @click="openRoles(row)">分配角色</el-button>
         </template>
       </el-table-column>
@@ -76,6 +77,21 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="resetVisible" :title="`重置密码 - ${resetTarget?.username || ''}`" width="440px" destroy-on-close>
+      <el-alert type="info" :closable="false" style="margin-bottom: 12px">
+        留空则由系统生成一次性随机密码；重置后该用户下次登录必须先修改密码。
+      </el-alert>
+      <el-form ref="resetRef" :model="resetForm" :rules="resetRules" label-width="90px">
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="resetForm.newPassword" type="password" show-password placeholder="留空则自动生成" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="onReset">确认重置</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="rolesVisible" :title="`分配角色 - ${currentUser?.username || ''}`" width="420px" destroy-on-close>
       <el-select v-model="selectedRoleIds" multiple style="width: 100%">
         <el-option v-for="r in roleOptions" :key="r.id" :label="r.roleName" :value="r.id" />
@@ -91,10 +107,10 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { assignUserRoles, changeUserStatus, createUser, pageUsers } from '@/api/user'
+import { assignUserRoles, changeUserStatus, createUser, pageUsers, resetUserPassword } from '@/api/user'
 import { listRoles } from '@/api/role'
-import { pageEmployees } from '@/api/employee'
-import type { EmployeeListItem, RoleVO, UserVO } from '@/api/types'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
+import type { RoleVO, UserVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -132,9 +148,29 @@ const createRules: FormRules = {
 }
 
 const roleOptions = ref<RoleVO[]>([])
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 const currentUser = ref<UserVO | null>(null)
 const selectedRoleIds = ref<number[]>([])
+
+const resetVisible = ref(false)
+const resetRef = ref<FormInstance>()
+const resetTarget = ref<UserVO | null>(null)
+const resetForm = reactive({ newPassword: '' })
+const resetRules: FormRules = {
+  newPassword: [
+    {
+      validator: (_rule, value: string, callback: (e?: Error) => void) => {
+        if (!value) return callback()
+        if (!/^(?=.*[A-Za-z])(?=.*\d).{8,64}$/.test(value)) {
+          callback(new Error('8-64 位，需同时包含字母和数字'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
 
 function formatTime(t: string | null): string {
   return t ? t.replace('T', ' ').slice(0, 19) : '-'
@@ -165,9 +201,8 @@ async function ensureOptions() {
   if (!roleOptions.value.length && auth.has('role:read')) {
     roleOptions.value = await listRoles()
   }
-  if (!employeeOptions.value.length && auth.has('employee:read')) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
+  if (auth.has('employee:read')) {
+    await loadEmployeeOptions()
   }
 }
 
@@ -204,6 +239,29 @@ async function onStatus(row: UserVO, target: string) {
   await changeUserStatus(row.id, target)
   ElMessage.success('操作成功')
   load()
+}
+
+function openReset(row: UserVO) {
+  resetTarget.value = row
+  resetForm.newPassword = ''
+  resetVisible.value = true
+}
+
+async function onReset() {
+  await resetRef.value?.validate()
+  saving.value = true
+  try {
+    const res = await resetUserPassword(resetTarget.value!.id, resetForm.newPassword || undefined)
+    resetVisible.value = false
+    await ElMessageBox.alert(
+      `用户 ${res.username} 的新密码为：${res.initialPassword}\n请通过安全渠道线下告知本人，该密码只显示这一次。`,
+      '密码已重置',
+      { type: 'success', confirmButtonText: '我已记录' }
+    )
+    load()
+  } finally {
+    saving.value = false
+  }
 }
 
 async function openRoles(row: UserVO) {

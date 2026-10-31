@@ -12,9 +12,13 @@ import com.example.company.role.entity.SysRole;
 import com.example.company.role.entity.SysUserRole;
 import com.example.company.role.mapper.SysRoleMapper;
 import com.example.company.role.mapper.SysUserRoleMapper;
+import com.example.company.user.dto.ResetPasswordRequest;
 import com.example.company.user.dto.UserCreateRequest;
 import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.PasswordHistoryService;
+import com.example.company.user.service.UserService;
+import com.example.company.user.vo.ResetPasswordVO;
 import com.example.company.user.vo.UserVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,8 +35,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Tag(name = "用户管理")
@@ -47,6 +55,8 @@ public class UserAdminController {
     private final EmployeeMapper employeeMapper;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
+    private final UserService userService;
+    private final PasswordHistoryService passwordHistoryService;
 
     @Operation(summary = "用户分页列表")
     @GetMapping
@@ -65,7 +75,7 @@ public class UserAdminController {
         }
         qw.orderByAsc("id");
         Page<SysUser> result = userMapper.selectPage(new Page<>(page, pageSize), qw);
-        return ApiResponse.ok(PageResponse.from(result, this::toVO));
+        return ApiResponse.ok(PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal()));
     }
 
     @Operation(summary = "用户详情")
@@ -91,7 +101,11 @@ public class UserAdminController {
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setEmployeeId(request.getEmployeeId());
         user.setStatus("ACTIVE");
+        // 初始密码由管理员线下交付，首次登录必须自行修改
+        user.setMustChangePassword(true);
         userMapper.insert(user);
+        // 初始密码也进历史：用户首次改密后不能直接改回初始密码
+        passwordHistoryService.record(user.getId(), user.getPasswordHash());
         saveUserRoles(user.getId(), roles.stream().map(SysRole::getId).toList());
         auditService.success("user:create", "user", user.getId(), "创建用户 " + user.getUsername());
         return ApiResponse.ok(toVO(user));
@@ -127,6 +141,16 @@ public class UserAdminController {
         userMapper.updateById(user);
         auditService.success("user:status", "user", id, "用户状态调整为 " + body.getStatus());
         return ApiResponse.ok();
+    }
+
+    @Operation(summary = "重置用户密码（不传新密码则生成一次性随机密码，仅响应返回一次）")
+    @PostMapping("/{id}/reset-password")
+    @PreAuthorize("hasAuthority('user:disable')")
+    public ApiResponse<ResetPasswordVO> resetPassword(@PathVariable Long id,
+                                                     @RequestBody(required = false) @Valid ResetPasswordRequest request) {
+        String newPassword = userService.resetPassword(id, request == null ? null : request.getNewPassword());
+        String username = requireUser(id).getUsername();
+        return ApiResponse.ok(new ResetPasswordVO(username, newPassword));
     }
 
     @Operation(summary = "分配角色")
@@ -184,18 +208,55 @@ public class UserAdminController {
         return user;
     }
 
+    /** 批量组装：员工姓名与角色一次查回，避免每行两次查询（列表页 N+1） */
+    private List<UserVO> toVOs(List<SysUser> users) {
+        if (users.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = new LinkedHashSet<>();
+        List<Long> userIds = new ArrayList<>(users.size());
+        for (SysUser user : users) {
+            userIds.add(user.getId());
+            if (user.getEmployeeId() != null) {
+                employeeIds.add(user.getEmployeeId());
+            }
+        }
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, e -> e));
+        // 一次取回本页用户的全部「用户-角色」关联，再一次性取回角色定义
+        List<SysUserRole> links = userRoleMapper.selectList(new QueryWrapper<SysUserRole>().in("user_id", userIds));
+        Map<Long, List<Long>> roleIdsByUser = new LinkedHashMap<>();
+        Set<Long> roleIds = new LinkedHashSet<>();
+        for (SysUserRole link : links) {
+            roleIdsByUser.computeIfAbsent(link.getUserId(), k -> new ArrayList<>()).add(link.getRoleId());
+            roleIds.add(link.getRoleId());
+        }
+        Map<Long, SysRole> roles = roleIds.isEmpty() ? Map.of()
+                : roleMapper.selectBatchIds(roleIds).stream()
+                        .collect(Collectors.toMap(SysRole::getId, r -> r));
+        List<UserVO> list = new ArrayList<>(users.size());
+        for (SysUser user : users) {
+            List<SysRole> userRoles = roleIdsByUser.getOrDefault(user.getId(), List.of()).stream()
+                    .map(roles::get).filter(java.util.Objects::nonNull).toList();
+            list.add(buildVO(user, employees.get(user.getEmployeeId()), userRoles));
+        }
+        return list;
+    }
+
     private UserVO toVO(SysUser user) {
+        Employee employee = user.getEmployeeId() == null ? null : employeeMapper.selectById(user.getEmployeeId());
+        return buildVO(user, employee, roleMapper.selectByUserId(user.getId()));
+    }
+
+    private UserVO buildVO(SysUser user, Employee employee, List<SysRole> roles) {
         UserVO vo = new UserVO();
         vo.setId(user.getId());
         vo.setUsername(user.getUsername());
         vo.setEmployeeId(user.getEmployeeId());
-        if (user.getEmployeeId() != null) {
-            Employee employee = employeeMapper.selectById(user.getEmployeeId());
-            vo.setEmployeeName(employee == null ? null : employee.getEmployeeName());
-        }
+        vo.setEmployeeName(employee == null ? null : employee.getEmployeeName());
         vo.setStatus(user.getStatus());
         vo.setLastLoginAt(user.getLastLoginAt());
-        List<SysRole> roles = roleMapper.selectByUserId(user.getId());
         vo.setRoles(roles.stream().map(SysRole::getRoleCode).collect(Collectors.toList()));
         vo.setRoleIds(roles.stream().map(SysRole::getId).collect(Collectors.toList()));
         return vo;

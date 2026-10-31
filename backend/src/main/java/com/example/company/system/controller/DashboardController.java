@@ -1,6 +1,7 @@
 package com.example.company.system.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.company.common.enums.DataModule;
 import com.example.company.common.api.ApiResponse;
 import com.example.company.common.security.DataScopeService;
 import com.example.company.common.security.LoginUser;
@@ -43,7 +44,7 @@ public class DashboardController {
     @PreAuthorize("hasAuthority('dashboard:view')")
     public ApiResponse<Map<String, Object>> summary() {
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.EMPLOYEE);
         Map<String, Object> result = new HashMap<>();
 
         if (visible == null || !visible.isEmpty()) {

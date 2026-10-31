@@ -1,6 +1,7 @@
 package com.example.company.employee;
 
 import com.example.company.audit.service.AuditService;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -25,8 +27,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import java.util.List;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -40,6 +45,8 @@ class EmployeeServiceImplTest {
     private DataScopeService dataScopeService;
     @Mock
     private AuditService auditService;
+    @Mock
+    private DictionaryService dictionaryService;
 
     @InjectMocks
     private EmployeeServiceImpl service;
@@ -112,6 +119,7 @@ class EmployeeServiceImplTest {
     void updateRejectsSelfAsManager() {
         Employee e = new Employee();
         e.setId(10L);
+        e.setDepartmentId(1L);
         e.setEmploymentStatus(EmployeeStatus.REGULAR.name());
         when(employeeMapper.selectById(10L)).thenReturn(e);
         when(departmentMapper.selectById(1L)).thenReturn(activeDept());
@@ -121,6 +129,81 @@ class EmployeeServiceImplTest {
         req.setManagerEmployeeId(10L);
         BusinessException ex = assertThrows(BusinessException.class, () -> service.update(10L, req));
         assertEquals(400, ex.getHttpStatus());
+    }
+
+    private Employee employee(String status, Long departmentId, String positionName) {
+        Employee e = new Employee();
+        e.setId(10L);
+        e.setDepartmentId(departmentId);
+        e.setPositionName(positionName);
+        e.setEmploymentStatus(status);
+        return e;
+    }
+
+    private EmployeeUpdateRequest baseUpdateRequest(Long departmentId) {
+        EmployeeUpdateRequest req = new EmployeeUpdateRequest();
+        req.setEmployeeName("张三");
+        req.setDepartmentId(departmentId);
+        return req;
+    }
+
+    @Test
+    void updateRejectsDepartmentChangeForOnboardedEmployee() {
+        when(employeeMapper.selectById(10L)).thenReturn(employee(EmployeeStatus.REGULAR.name(), 1L, "后端工程师"));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.update(10L, baseUpdateRequest(2L)));
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("调岗"), ex.getMessage());
+    }
+
+    @Test
+    void updateRejectsPositionChangeForOnboardedEmployee() {
+        when(employeeMapper.selectById(10L)).thenReturn(employee(EmployeeStatus.REGULAR.name(), 1L, "后端工程师"));
+        when(departmentMapper.selectById(1L)).thenReturn(activeDept());
+        EmployeeUpdateRequest req = baseUpdateRequest(1L);
+        req.setPositionName("前端工程师");
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.update(10L, req));
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("调岗"), ex.getMessage());
+    }
+
+    @Test
+    void updateAllowsDepartmentFixBeforeOnboarding() {
+        Employee e = employee(EmployeeStatus.PENDING.name(), 1L, null);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department target = activeDept();
+        target.setId(2L);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        service.update(10L, baseUpdateRequest(2L));
+
+        assertEquals(2L, e.getDepartmentId());
+    }
+
+    @Test
+    void updateAuditSummaryRecordsFieldLevelDiff() {
+        Employee e = employee(EmployeeStatus.PENDING.name(), 1L, "实习工程师");
+        e.setEmployeeNo("E0100");
+        e.setPhone("13800001111");
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department source = activeDept();
+        Department target = activeDept();
+        target.setId(2L);
+        target.setDepartmentName("产品部");
+        when(departmentMapper.selectById(1L)).thenReturn(source);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        EmployeeUpdateRequest req = baseUpdateRequest(2L);
+        req.setPhone("13900002222");
+        service.update(10L, req);
+
+        ArgumentCaptor<String> summary = ArgumentCaptor.forClass(String.class);
+        verify(auditService).success(eq("employee:update"), eq("employee"), eq(10L), summary.capture());
+        assertThat(summary.getValue())
+                .startsWith("更新员工档案 E0100")
+                .contains("部门 研发部→产品部")
+                .contains("手机号 138****1111→139****2222")
+                .doesNotContain("13900002222");
     }
 
     @Test

@@ -13,8 +13,8 @@
 
     <el-table v-loading="loading" :data="records">
       <el-table-column prop="requestNo" label="单号" width="180" />
-      <el-table-column label="员工" width="140">
-        <template #default="{ row }">{{ row.employeeName }}（{{ row.employeeNo }}）</template>
+      <el-table-column label="员工" width="160">
+        <template #default="{ row }">{{ employeeLabel(row) }}</template>
       </el-table-column>
       <el-table-column label="类型" width="90">
         <template #default="{ row }">{{ dictLabel('changeType', row.changeType) }}</template>
@@ -47,12 +47,52 @@
 
     <el-dialog v-model="createVisible" title="新建申请" width="520px" destroy-on-close>
       <el-form ref="createRef" :model="createForm" :rules="createRules" label-width="90px">
-        <el-form-item label="员工" prop="employeeId">
+        <el-form-item v-if="createForm.changeType === 'ONBOARD'" label="员工来源">
+          <el-radio-group v-model="createForm.newHire">
+            <el-radio :value="false">已有档案</el-radio>
+            <el-radio :value="true">新员工（由流程建档）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="showEmployeePicker" label="员工" prop="employeeId">
           <el-select v-model="createForm.employeeId" filterable style="width: 100%" placeholder="请选择员工">
             <el-option v-for="e in employeeOptions" :key="e.id" :label="`${e.employeeName}（${e.employeeNo}）`"
               :value="e.id" />
           </el-select>
         </el-form-item>
+        <template v-if="showHireFields">
+          <el-alert type="info" :closable="false" show-icon class="hire-tip"
+            title="批准时才建档并自动开通账号"
+            description="账号为工号，初始密码不在此显示；批准后请在「系统管理 - 用户」用「重置密码」线下交付。" />
+          <el-form-item label="工号" prop="hireEmployeeNo">
+            <el-input v-model="createForm.hireEmployeeNo" maxlength="32" />
+          </el-form-item>
+          <el-form-item label="姓名" prop="hireEmployeeName">
+            <el-input v-model="createForm.hireEmployeeName" maxlength="100" />
+          </el-form-item>
+          <el-form-item label="部门" prop="hireDepartmentId">
+            <el-tree-select v-model="createForm.hireDepartmentId" :data="deptTree" check-strictly node-key="id"
+              :props="{ label: 'departmentName', children: 'children' }" :render-after-expand="false"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="性别">
+            <el-select v-model="createForm.hireGender" clearable style="width: 100%">
+              <el-option v-for="o in genderOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="出生日期">
+            <el-date-picker v-model="createForm.hireBirthDate" type="date" value-format="YYYY-MM-DD"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="createForm.hirePhone" maxlength="20" />
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="createForm.hireEmail" maxlength="100" />
+          </el-form-item>
+          <el-form-item label="岗位">
+            <el-input v-model="createForm.hirePositionName" maxlength="100" />
+          </el-form-item>
+        </template>
         <el-form-item label="类型" prop="changeType">
           <el-select v-model="createForm.changeType" style="width: 100%">
             <el-option v-for="o in typeOptions" :key="o.value" :label="o.label" :value="o.value" />
@@ -94,16 +134,19 @@
           <el-input v-model="processForm.comment" type="textarea" :rows="3" />
         </el-form-item>
       </el-form>
+      <el-alert v-if="approveBlocked" type="warning" :closable="false" show-icon
+        title="生效日期未到，当前不能批准"
+        description="提前批准会让变更立即生效；请驳回归还申请人修改生效日期，或等到生效日期当天再办理。" />
       <template #footer>
         <el-button @click="processVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onProcess">确定</el-button>
+        <el-button type="primary" :loading="saving" :disabled="approveBlocked" @click="onProcess">确定</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   cancelChangeRequest,
@@ -112,9 +155,9 @@ import {
   processChangeRequest,
   submitChangeRequest
 } from '@/api/employment'
-import { pageEmployees } from '@/api/employee'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import { fetchDepartmentTree } from '@/api/department'
-import type { ChangeRequestVO, DepartmentVO, EmployeeListItem } from '@/api/types'
+import type { ChangeRequestVO, DepartmentVO } from '@/api/types'
 import { dictLabel, dictOptions, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
@@ -140,17 +183,92 @@ const createForm = reactive({
   effectiveDate: null as string | null,
   reason: '',
   targetDepartmentId: null as number | null,
-  targetPositionName: ''
+  targetPositionName: '',
+  // 入职申请可选"新员工由流程建档"：不选员工，改填新员工信息，批准时才建档并开户
+  newHire: false,
+  hireEmployeeNo: '',
+  hireEmployeeName: '',
+  hireDepartmentId: null as number | null,
+  hireGender: '',
+  hireBirthDate: null as string | null,
+  hirePhone: '',
+  hireEmail: '',
+  hirePositionName: ''
 })
+const showEmployeePicker = computed(
+  () => createForm.changeType !== 'ONBOARD' || !createForm.newHire
+)
+const showHireFields = computed(() => createForm.changeType === 'ONBOARD' && createForm.newHire)
 const createRules: FormRules = {
-  employeeId: [{ required: true, message: '请选择员工', trigger: 'change' }],
+  employeeId: [
+    {
+      validator: (_rule, value, callback) => {
+        if (showEmployeePicker.value && !value) {
+          callback(new Error('请选择员工'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change'
+    }
+  ],
+  hireEmployeeNo: [
+    {
+      validator: (_rule, value, callback) => {
+        if (showHireFields.value && !String(value || '').trim()) {
+          callback(new Error('请输入工号'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ],
+  hireEmployeeName: [
+    {
+      validator: (_rule, value, callback) => {
+        if (showHireFields.value && !String(value || '').trim()) {
+          callback(new Error('请输入姓名'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ],
+  hireDepartmentId: [
+    {
+      validator: (_rule, value, callback) => {
+        if (showHireFields.value && !value) {
+          callback(new Error('请选择部门'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change'
+    }
+  ],
   changeType: [{ required: true, message: '请选择类型', trigger: 'change' }],
   effectiveDate: [{ required: true, message: '请选择生效日期', trigger: 'change' }],
   targetDepartmentId: [{ required: true, message: '请选择目标部门', trigger: 'change' }]
 }
-const processForm = reactive({ id: 0, decision: 'APPROVE', comment: '' })
+const genderOptions = dictOptions('gender')
+const processForm = reactive({ id: 0, decision: 'APPROVE', comment: '', effectiveDate: '' })
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+// 生效日期未到不能批准：后端同样拦截，这里提前提示避免无谓报错
+function todayStr() {
+  const d = new Date()
+  const m = `${d.getMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getDate()}`.padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+const futureEffective = computed(() => {
+  if (!processForm.effectiveDate) return false
+  return processForm.effectiveDate > todayStr()
+})
+const approveBlocked = computed(() => processForm.decision === 'APPROVE' && futureEffective.value)
+
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 const deptTree = ref<DepartmentVO[]>([])
 
 async function load() {
@@ -169,16 +287,24 @@ async function load() {
   }
 }
 
+function employeeLabel(row: ChangeRequestVO) {
+  if (row.employeeName) {
+    return `${row.employeeName}（${row.employeeNo ?? ''}）`
+  }
+  const payload = (row.payload ?? {}) as Record<string, unknown>
+  if (payload.employeeName) {
+    return `${payload.employeeName}（待建档）`
+  }
+  return '待建档'
+}
+
 function reload() {
   page.value = 1
   load()
 }
 
 async function openCreate() {
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
   if (!deptTree.value.length && auth.has('department:read')) {
     deptTree.value = await fetchDepartmentTree()
   }
@@ -188,7 +314,16 @@ async function openCreate() {
     effectiveDate: null,
     reason: '',
     targetDepartmentId: null,
-    targetPositionName: ''
+    targetPositionName: '',
+    newHire: false,
+    hireEmployeeNo: '',
+    hireEmployeeName: '',
+    hireDepartmentId: null,
+    hireGender: '',
+    hireBirthDate: null,
+    hirePhone: '',
+    hireEmail: '',
+    hirePositionName: ''
   })
   createVisible.value = true
 }
@@ -204,8 +339,18 @@ async function onCreate() {
         payload.targetPositionName = createForm.targetPositionName
       }
     }
+    if (showHireFields.value) {
+      payload.employeeNo = createForm.hireEmployeeNo.trim()
+      payload.employeeName = createForm.hireEmployeeName.trim()
+      payload.departmentId = createForm.hireDepartmentId
+      if (createForm.hireGender) payload.gender = createForm.hireGender
+      if (createForm.hireBirthDate) payload.birthDate = createForm.hireBirthDate
+      if (createForm.hirePhone) payload.phone = createForm.hirePhone.trim()
+      if (createForm.hireEmail) payload.email = createForm.hireEmail.trim()
+      if (createForm.hirePositionName) payload.positionName = createForm.hirePositionName.trim()
+    }
     await createChangeRequest({
-      employeeId: createForm.employeeId!,
+      employeeId: showHireFields.value ? null : createForm.employeeId,
       changeType: createForm.changeType,
       effectiveDate: createForm.effectiveDate!,
       reason: createForm.reason || null,
@@ -237,6 +382,7 @@ function openProcess(row: ChangeRequestVO) {
   processForm.id = row.id
   processForm.decision = 'APPROVE'
   processForm.comment = ''
+  processForm.effectiveDate = row.effectiveDate || ''
   processVisible.value = true
 }
 
@@ -259,5 +405,9 @@ onMounted(load)
 .pager {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+.hire-tip {
+  margin-bottom: 12px;
 }
 </style>

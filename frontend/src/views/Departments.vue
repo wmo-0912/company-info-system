@@ -31,7 +31,7 @@
             <div style="display: flex; align-items: center; justify-content: space-between;">
               <span>{{ selected ? `${selected.departmentName} - 员工列表` : '请选择左侧部门' }}</span>
               <el-radio-group v-if="selected" v-model="empStatus" size="small" @change="onStatusChange">
-                <el-radio-button value="PROBATION,REGULAR,TRANSFERRED">在职员工</el-radio-button>
+                <el-radio-button value="PROBATION,REGULAR">在职员工</el-radio-button>
                 <el-radio-button value="PENDING">待入职</el-radio-button>
                 <el-radio-button value="">全部</el-radio-button>
               </el-radio-group>
@@ -98,7 +98,7 @@ import {
   fetchDepartmentTree,
   updateDepartment
 } from '@/api/department'
-import { pageEmployees } from '@/api/employee'
+import { useEmployeeOptions } from '@/composables/useEmployeeOptions'
 import type { DepartmentVO, EmployeeListItem } from '@/api/types'
 import { dictLabel, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
@@ -115,7 +115,7 @@ const empLoading = ref(false)
 const empPage = ref(1)
 const empPageSize = 10
 const empTotal = ref(0)
-const empStatus = ref('PROBATION,REGULAR,TRANSFERRED')
+const empStatus = ref('PROBATION,REGULAR')
 
 const dialogVisible = ref(false)
 const editing = ref<DepartmentVO | null>(null)
@@ -133,7 +133,7 @@ const formRules: FormRules = {
   departmentCode: [{ required: true, message: '请输入部门编码', trigger: 'blur' }]
 }
 
-const employeeOptions = ref<EmployeeListItem[]>([])
+const { options: employeeOptions, load: loadEmployeeOptions } = useEmployeeOptions()
 
 const parentOptions = computed(() => {
   const filter = (nodes: DepartmentVO[]): DepartmentVO[] =>
@@ -182,10 +182,7 @@ function onEmpPage(p: number) {
 
 async function openDialog(dept?: DepartmentVO) {
   editing.value = dept || null
-  if (!employeeOptions.value.length) {
-    const res = await pageEmployees({ page: 1, pageSize: 100 })
-    employeeOptions.value = res.records
-  }
+  await loadEmployeeOptions()
   if (dept) {
     form.departmentName = dept.departmentName
     form.departmentCode = dept.departmentCode

@@ -75,6 +75,12 @@
         </el-descriptions>
       </el-form>
 
+      <div class="section-title">账号安全</div>
+      <el-alert v-if="auth.user?.mustChangePassword" type="warning" :closable="false" style="margin-bottom: 12px">
+        首次登录或密码已被管理员重置，请先修改密码后再使用其他功能。
+      </el-alert>
+      <el-button type="primary" plain @click="openPasswordDialog">修改登录密码</el-button>
+
       <div class="section-title">我的任职历史</div>
       <el-table v-loading="recordsLoading" :data="records" border>
         <el-table-column label="类型" width="100">
@@ -99,19 +105,40 @@
         </template>
       </el-table>
     </el-card>
+
+    <el-dialog v-model="pwdVisible" title="修改登录密码" width="420px" destroy-on-close>
+      <el-form ref="pwdRef" :model="pwdForm" :rules="pwdRules" label-width="90px">
+        <el-form-item label="原密码" prop="oldPassword">
+          <el-input v-model="pwdForm.oldPassword" type="password" show-password autocomplete="current-password" />
+        </el-form-item>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="pwdForm.newPassword" type="password" show-password autocomplete="new-password"
+            placeholder="8-64 位，需同时包含字母和数字" />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirmPassword">
+          <el-input v-model="pwdForm.confirmPassword" type="password" show-password autocomplete="new-password" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pwdSaving" @click="onChangePassword">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { fetchMyEmploymentRecords, fetchProfile, updateProfile } from '@/api/profile'
+import { useRouter } from 'vue-router'
+import { changeMyPassword, fetchMyEmploymentRecords, fetchProfile, updateProfile } from '@/api/profile'
 import { listDictItems } from '@/api/dictionary'
 import type { DictionaryItem, EmployeeDetail, EmploymentRecordVO } from '@/api/types'
 import { dictLabel, dictTagType } from '@/utils/dict'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
 const editing = ref(false)
@@ -178,6 +205,55 @@ async function onSave() {
     ElMessage.success('资料已保存')
   } finally {
     saving.value = false
+  }
+}
+
+const pwdVisible = ref(false)
+const pwdSaving = ref(false)
+const pwdRef = ref<FormInstance>()
+const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const pwdRules: FormRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    {
+      pattern: /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/,
+      message: '8-64 位，需同时包含字母和数字',
+      trigger: 'blur'
+    }
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value: string, callback: (e?: Error) => void) => {
+        if (value !== pwdForm.newPassword) {
+          callback(new Error('两次输入的新密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
+
+function openPasswordDialog() {
+  Object.assign(pwdForm, { oldPassword: '', newPassword: '', confirmPassword: '' })
+  pwdVisible.value = true
+}
+
+async function onChangePassword() {
+  await pwdRef.value?.validate()
+  pwdSaving.value = true
+  try {
+    await changeMyPassword(pwdForm.oldPassword, pwdForm.newPassword)
+    ElMessage.success('密码已修改，请使用新密码重新登录')
+    pwdVisible.value = false
+    // 改密后强制重新登录，避免旧会话继续沿用
+    await auth.logout()
+    router.push('/login')
+  } finally {
+    pwdSaving.value = false
   }
 }
 

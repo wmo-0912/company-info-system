@@ -3,13 +3,17 @@ package com.example.company.role.controller;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.ApiResponse;
+import com.example.company.common.enums.DataModule;
+import com.example.company.common.enums.DataScopeType;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.role.dto.RoleRequest;
 import com.example.company.role.entity.SysPermission;
 import com.example.company.role.entity.SysRole;
+import com.example.company.role.entity.SysRoleModuleScope;
 import com.example.company.role.entity.SysRolePermission;
 import com.example.company.role.mapper.SysPermissionMapper;
 import com.example.company.role.mapper.SysRoleMapper;
+import com.example.company.role.mapper.SysRoleModuleScopeMapper;
 import com.example.company.role.mapper.SysRolePermissionMapper;
 import com.example.company.role.vo.PermissionTreeVO;
 import com.example.company.role.vo.RoleVO;
@@ -17,6 +21,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -27,6 +32,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -36,9 +42,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class RoleController {
 
+    /** 内置角色：初始化时创建，被代码与前端菜单依赖，不允许改编码、停用或削弱管理员权限 */
+    private static final Set<String> BUILT_IN_ROLE_CODES = Set.of("ADMIN", "HR", "PROJECT_MANAGER", "EMPLOYEE");
+    private static final String ROLE_MANAGE_PERMISSION = "role:manage";
+
     private final SysRoleMapper roleMapper;
     private final SysPermissionMapper permissionMapper;
     private final SysRolePermissionMapper rolePermissionMapper;
+    private final SysRoleModuleScopeMapper roleModuleScopeMapper;
     private final AuditService auditService;
 
     @Operation(summary = "角色列表")
@@ -74,6 +85,13 @@ public class RoleController {
     @Transactional
     public ApiResponse<RoleVO> updateRole(@PathVariable Long id, @Valid @RequestBody RoleRequest request) {
         SysRole role = requireRole(id);
+        boolean builtIn = BUILT_IN_ROLE_CODES.contains(role.getRoleCode());
+        if (builtIn && !role.getRoleCode().equals(request.getRoleCode())) {
+            throw BusinessException.badRequest("内置角色的编码不可修改: " + role.getRoleCode());
+        }
+        if ("ADMIN".equals(role.getRoleCode()) && !"ALL".equals(request.getDataScope())) {
+            throw BusinessException.badRequest("管理员角色的数据范围必须是 ALL");
+        }
         if (roleMapper.selectCount(new QueryWrapper<SysRole>()
                 .eq("role_code", request.getRoleCode()).ne("id", id)) > 0) {
             throw BusinessException.conflict("角色编码已存在: " + request.getRoleCode());
@@ -87,12 +105,36 @@ public class RoleController {
         return ApiResponse.ok(toVO(role));
     }
 
+    @Operation(summary = "启用 / 停用角色")
+    @PatchMapping("/roles/{id}/enabled")
+    @PreAuthorize("hasAuthority('role:manage')")
+    @Transactional
+    public ApiResponse<RoleVO> setEnabled(@PathVariable Long id, @Valid @RequestBody EnabledBody body) {
+        SysRole role = requireRole(id);
+        if (BUILT_IN_ROLE_CODES.contains(role.getRoleCode())) {
+            throw BusinessException.badRequest("内置角色不能停用: " + role.getRoleCode());
+        }
+        boolean enabled = Boolean.TRUE.equals(body.getEnabled());
+        if (Boolean.valueOf(enabled).equals(role.getEnabled())) {
+            return ApiResponse.ok(toVO(role));
+        }
+        role.setEnabled(enabled);
+        roleMapper.updateById(role);
+        auditService.success("role:enabled", "role", id,
+                (enabled ? "启用角色 " : "停用角色 ") + role.getRoleCode());
+        return ApiResponse.ok(toVO(role));
+    }
+
     @Operation(summary = "保存角色权限")
     @PutMapping("/roles/{id}/permissions")
     @PreAuthorize("hasAuthority('role:manage')")
     @Transactional
     public ApiResponse<Void> savePermissions(@PathVariable Long id, @Valid @RequestBody PermissionsBody body) {
-        requireRole(id);
+        SysRole role = requireRole(id);
+        // ADMIN 角色必须保留角色管理权限，否则一次误操作后系统里再没人能分配权限（自锁）
+        if ("ADMIN".equals(role.getRoleCode()) && !body.getPermissionIds().contains(roleManagePermissionId())) {
+            throw BusinessException.badRequest("管理员角色必须保留「角色管理」权限，否则将无人能再维护权限");
+        }
         rolePermissionMapper.delete(new QueryWrapper<SysRolePermission>().eq("role_id", id));
         for (Long permissionId : body.getPermissionIds()) {
             if (permissionMapper.selectById(permissionId) == null) {
@@ -105,6 +147,61 @@ public class RoleController {
         }
         auditService.success("role:permissions", "role", id, "更新角色权限");
         return ApiResponse.ok();
+    }
+
+    @Operation(summary = "保存角色模块级数据范围")
+    @PutMapping("/roles/{id}/module-scopes")
+    @PreAuthorize("hasAuthority('role:manage')")
+    @Transactional
+    public ApiResponse<RoleVO> saveModuleScopes(@PathVariable Long id,
+                                                @RequestBody ModuleScopesBody body) {
+        SysRole role = requireRole(id);
+        Map<String, String> normalized = normalizeModuleScopes(body.getModuleScopes());
+        if ("ADMIN".equals(role.getRoleCode())
+                && normalized.values().stream().anyMatch(scope -> !DataScopeType.ALL.name().equals(scope))) {
+            throw BusinessException.badRequest("管理员角色的模块数据范围必须全部为 ALL");
+        }
+        roleModuleScopeMapper.delete(new QueryWrapper<SysRoleModuleScope>().eq("role_id", id));
+        normalized.forEach((module, scope) -> {
+            SysRoleModuleScope entity = new SysRoleModuleScope();
+            entity.setRoleId(id);
+            entity.setModuleCode(module);
+            entity.setScopeType(scope);
+            roleModuleScopeMapper.insert(entity);
+        });
+        auditService.success("role:module-scopes", "role", id,
+                "更新角色模块数据范围 " + role.getRoleCode() + " " + normalized);
+        return ApiResponse.ok(toVO(role));
+    }
+
+    /** 校验并归一化模块级数据范围：未知模块/非法取值直接 400，不静默丢弃 */
+    private Map<String, String> normalizeModuleScopes(Map<String, String> input) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (input == null) {
+            return result;
+        }
+        for (Map.Entry<String, String> entry : input.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank()) {
+                continue;
+            }
+            if (entry.getValue() == null || entry.getValue().isBlank()) {
+                continue; // 空白表示该模块不覆盖，沿用角色默认值
+            }
+            String module = entry.getKey().trim().toUpperCase(java.util.Locale.ROOT);
+            String scope = entry.getValue().trim().toUpperCase(java.util.Locale.ROOT);
+            try {
+                DataModule.valueOf(module);
+            } catch (IllegalArgumentException e) {
+                throw BusinessException.badRequest("未知的模块编码: " + entry.getKey());
+            }
+            try {
+                DataScopeType.valueOf(scope);
+            } catch (IllegalArgumentException e) {
+                throw BusinessException.badRequest("未知的数据范围: " + entry.getValue());
+            }
+            result.put(module, scope);
+        }
+        return result;
     }
 
     @Operation(summary = "权限树")
@@ -126,6 +223,15 @@ public class RoleController {
         return ApiResponse.ok(roots);
     }
 
+    private Long roleManagePermissionId() {
+        SysPermission permission = permissionMapper.selectOne(new QueryWrapper<SysPermission>()
+                .eq("permission_code", ROLE_MANAGE_PERMISSION).last("limit 1"));
+        if (permission == null) {
+            throw BusinessException.badRequest("系统缺少「角色管理」权限点，请先执行数据库初始化");
+        }
+        return permission.getId();
+    }
+
     private SysRole requireRole(Long id) {
         SysRole role = roleMapper.selectById(id);
         if (role == null) {
@@ -144,6 +250,11 @@ public class RoleController {
         vo.setEnabled(role.getEnabled());
         vo.setPermissionIds(permissionMapper.selectByRoleId(role.getId()).stream()
                 .map(SysPermission::getId).toList());
+        vo.setModuleScopes(roleModuleScopeMapper.selectList(new QueryWrapper<SysRoleModuleScope>()
+                        .eq("role_id", role.getId()))
+                .stream()
+                .collect(Collectors.toMap(SysRoleModuleScope::getModuleCode, SysRoleModuleScope::getScopeType,
+                        (a, b) -> a)));
         return vo;
     }
 
@@ -158,6 +269,18 @@ public class RoleController {
         vo.setIcon(p.getIcon());
         vo.setSortOrder(p.getSortOrder());
         return vo;
+    }
+
+    @Data
+    public static class EnabledBody {
+        @NotNull(message = "启用状态不能为空")
+        private Boolean enabled;
+    }
+
+    @Data
+    public static class ModuleScopesBody {
+        /** moduleCode -> scope，空白/缺失表示该模块沿用角色默认数据范围 */
+        private Map<String, String> moduleScopes;
     }
 
     @Data

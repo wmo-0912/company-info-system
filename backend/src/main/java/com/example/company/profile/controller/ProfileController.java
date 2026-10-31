@@ -13,6 +13,8 @@ import com.example.company.employee.vo.EmployeeDetailVO;
 import com.example.company.employment.service.EmploymentService;
 import com.example.company.employment.vo.EmploymentRecordVO;
 import com.example.company.profile.dto.ProfileUpdateRequest;
+import com.example.company.user.dto.ChangePasswordRequest;
+import com.example.company.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -33,6 +35,7 @@ public class ProfileController {
     private final DepartmentMapper departmentMapper;
     private final EmploymentService employmentService;
     private final AuditService auditService;
+    private final UserService userService;
 
     @Operation(summary = "我的档案")
     @GetMapping
@@ -63,6 +66,15 @@ public class ProfileController {
         employeeMapper.updateById(employee);
         auditService.success("profile:update", "employee", employee.getId(), "个人资料更新（白名单字段）");
         return myProfile();
+    }
+
+    @Operation(summary = "修改我的登录密码")
+    @PutMapping("/password")
+    @PreAuthorize("isAuthenticated()")
+    public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        // 只允许改本人密码：用户 ID 取自登录上下文，不接受前端传入
+        userService.changePassword(SecurityUtils.getCurrentUserId(), request.getOldPassword(), request.getNewPassword());
+        return ApiResponse.ok();
     }
 
     @Operation(summary = "我的任职历史")

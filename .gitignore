@@ -44,4 +44,11 @@ dist/
 
 company_info.dump
 
+# 运维手册等含真实服务器 IP / 口令的材料只保留在本地，不入库（docs/ 下为脱敏版本）
 operations/
+
+
+docs/
+
+# 本地 AI 协作约定，只保留在本地，不入库
+agent.md

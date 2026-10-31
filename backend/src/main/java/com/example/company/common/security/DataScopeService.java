@@ -1,5 +1,6 @@
 package com.example.company.common.security;
 
+import com.example.company.common.enums.DataModule;
 import com.example.company.common.enums.DataScopeType;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.project.entity.ProjectTeamMember;
@@ -10,12 +11,14 @@ import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
 import com.example.company.project.entity.ProjectTeam;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -23,6 +26,7 @@ import java.util.Set;
  * 返回 null 表示不限制（ALL）；返回集合表示仅允许集合内的员工 ID。
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class DataScopeService {
 
@@ -32,13 +36,19 @@ public class DataScopeService {
     private final EmployeeMapper employeeMapper;
 
     /**
-     * 计算当前用户可见的员工 ID 集合。
+     * 计算当前用户可见的员工 ID 集合（按角色默认数据范围）。
      *
      * @return null 表示可见全部；空集合表示不可见任何员工
      */
     public Set<Long> visibleEmployeeIds(LoginUser user) {
-        String scope = user.getDataScope() == null ? DataScopeType.SELF.name() : user.getDataScope();
-        return switch (DataScopeType.valueOf(scope)) {
+        return visibleEmployeeIds(user, null);
+    }
+
+    /**
+     * 计算当前用户在指定模块可见的员工 ID 集合：模块级配置优先于角色级默认值。
+     */
+    public Set<Long> visibleEmployeeIds(LoginUser user, DataModule module) {
+        return switch (parseScope(effectiveScope(user, module))) {
             case ALL -> null;
             case SELF -> user.getEmployeeId() == null ? Set.of() : Set.of(user.getEmployeeId());
             case PROJECT -> projectVisibleEmployeeIds(user.getEmployeeId());
@@ -46,12 +56,46 @@ public class DataScopeService {
         };
     }
 
+    /**
+     * 取指定模块生效的数据范围：sys_role_module_scope 有配置就用配置，否则沿用角色默认的 data_scope。
+     */
+    public String effectiveScope(LoginUser user, DataModule module) {
+        if (user == null) {
+            return DataScopeType.SELF.name();
+        }
+        if (module != null && user.getModuleScopes() != null) {
+            String override = user.getModuleScopes().get(module.name());
+            if (override != null && !override.isBlank()) {
+                return override;
+            }
+        }
+        return user.getDataScope();
+    }
+
+    /**
+     * 解析数据范围枚举。脏数据/历史角色写入的非法值不能变成 500，按最小权限 SELF 处理并留日志，
+     * 由管理员在角色管理里修正取值。
+     */
+    private DataScopeType parseScope(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DataScopeType.SELF;
+        }
+        try {
+            return DataScopeType.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("角色数据范围取值非法，按 SELF（仅本人）处理: {}", raw);
+            return DataScopeType.SELF;
+        }
+    }
+
     private Set<Long> projectVisibleEmployeeIds(Long managerEmployeeId) {
         if (managerEmployeeId == null) {
             return Set.of();
         }
+        // 已关闭的项目组不再扩大数据范围，避免历史成员长期可见
         List<ProjectTeam> teams = projectTeamMapper.selectList(new QueryWrapper<ProjectTeam>()
-                .eq("manager_employee_id", managerEmployeeId));
+                .eq("manager_employee_id", managerEmployeeId)
+                .eq("status", "ACTIVE"));
         Set<Long> result = new HashSet<>();
         result.add(managerEmployeeId); // 自己始终可见
         if (teams.isEmpty()) {
@@ -101,7 +145,47 @@ public class DataScopeService {
 
     /** 校验目标员工是否在当前用户数据范围内 */
     public boolean canAccessEmployee(LoginUser user, Long employeeId) {
-        Set<Long> visible = visibleEmployeeIds(user);
+        return canAccessEmployee(user, employeeId, null);
+    }
+
+    /** 校验目标员工是否在指定模块的数据范围内 */
+    public boolean canAccessEmployee(LoginUser user, Long employeeId, DataModule module) {
+        Set<Long> visible = visibleEmployeeIds(user, module);
         return visible == null || visible.contains(employeeId);
+    }
+
+    /**
+     * 校验项目组是否在当前用户数据范围内（用于详情、成员等按 ID 直查的读操作）。
+     * ALL / DEPARTMENT 可见全部项目组（与列表口径一致）；
+     * PROJECT 仅本人负责或本人在组的项目组；SELF 仅本人在组的项目组。
+     */
+    public boolean canAccessProject(LoginUser user, ProjectTeam team) {
+        return canAccessProject(user, team, null);
+    }
+
+    /** 按指定模块的数据范围校验项目组可见性 */
+    public boolean canAccessProject(LoginUser user, ProjectTeam team, DataModule module) {
+        if (team == null || user == null) {
+            return false;
+        }
+        return switch (parseScope(effectiveScope(user, module))) {
+            case ALL, DEPARTMENT -> true;
+            case PROJECT -> isProjectManager(user, team) || isActiveMember(user.getEmployeeId(), team.getId());
+            case SELF -> isActiveMember(user.getEmployeeId(), team.getId());
+        };
+    }
+
+    private boolean isProjectManager(LoginUser user, ProjectTeam team) {
+        return user.getEmployeeId() != null && user.getEmployeeId().equals(team.getManagerEmployeeId());
+    }
+
+    private boolean isActiveMember(Long employeeId, Long projectTeamId) {
+        if (employeeId == null || projectTeamId == null) {
+            return false;
+        }
+        return projectTeamMemberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
+                .eq("project_team_id", projectTeamId)
+                .eq("employee_id", employeeId)
+                .isNull("left_at")) > 0;
     }
 }

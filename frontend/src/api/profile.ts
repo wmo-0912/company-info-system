@@ -18,6 +18,10 @@ export function updateProfile(body: ProfileUpdateBody) {
   return apiPut<EmployeeDetail>('/profile', body)
 }
 
+export function changeMyPassword(oldPassword: string, newPassword: string) {
+  return apiPut<void>('/profile/password', { oldPassword, newPassword })
+}
+
 export function fetchMyEmploymentRecords() {
   return apiGet<EmploymentRecordVO[]>('/profile/employment-records')
 }

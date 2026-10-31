@@ -8,6 +8,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -18,7 +19,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.OffsetDateTime;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -37,13 +40,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 try {
                     Long userId = Long.valueOf(claims.getSubject());
                     LoginUser loginUser = userService.loadLoginUser(userId);
-                    if (loginUser != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                    if (loginUser != null && !sameTokenVersion(claims, loginUser)) {
+                        // 密码已修改/被重置后，旧 token 立即作废（无需维护黑名单）
+                        log.debug("JWT 版本不匹配，按未认证处理：userId={}", userId);
+                    }
+                    if (loginUser != null && sameTokenVersion(claims, loginUser)
+                            && SecurityContextHolder.getContext().getAuthentication() == null) {
                         var authorities = loginUser.getPermissions().stream()
                                 .map(SimpleGrantedAuthority::new)
                                 .toList();
                         var authentication = new UsernamePasswordAuthenticationToken(loginUser, null, authorities);
                         authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                         SecurityContextHolder.getContext().setAuthentication(authentication);
+                        // 服务端强制执行"首登必改密"：只放行个人中心与认证接口，
+                        // 否则前端路由守卫一旦被绕过（直接调 API），初始密码可长期不换。
+                        if (loginUser.isMustChangePassword() && !isPasswordChangeFlow(request)) {
+                            writePasswordChangeRequired(response);
+                            return;
+                        }
                     }
                 } catch (NumberFormatException ignored) {
                     // subject 非数字，忽略，按未认证处理
@@ -51,5 +65,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         chain.doFilter(request, response);
+    }
+
+    /** token 里没有 ver 声明时按 0 处理（兼容升级前签发、尚未过期的 token） */
+    private boolean sameTokenVersion(Claims claims, LoginUser loginUser) {
+        Integer claimed = claims.get(JwtTokenProvider.CLAIM_TOKEN_VERSION, Integer.class);
+        Integer current = loginUser.getTokenVersion();
+        return (claimed == null ? 0 : claimed) == (current == null ? 0 : current);
+    }
+
+    private boolean isPasswordChangeFlow(HttpServletRequest request) {
+        String uri = request.getRequestURI().substring(request.getContextPath().length());
+        // 个人中心（含 PUT /profile/password）与 /auth/me 属于改密流程内允许的接口
+        return uri.startsWith("/api/v1/profile") || uri.startsWith("/api/v1/auth");
+    }
+
+    private void writePasswordChangeRequired(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json;charset=UTF-8");
+        response.getWriter().write("""
+                {"code":"FORBIDDEN","message":"请先修改初始密码后再使用系统","data":null,"timestamp":"%s"}
+                """.formatted(OffsetDateTime.now()));
     }
 }

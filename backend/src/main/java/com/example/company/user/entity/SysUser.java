@@ -20,9 +20,15 @@ public class SysUser {
 
     private String status;
 
+    /** 首次登录或管理员重置密码后为 true，需先修改密码才能继续使用 */
+    private Boolean mustChangePassword;
+
     private OffsetDateTime lastLoginAt;
 
     private Integer failedLoginCount;
+
+    /** 会话版本：密码修改/重置时自增，签发在旧版本上的 JWT 随即失效 */
+    private Integer tokenVersion;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

@@ -20,6 +20,14 @@ export interface CurrentUser {
   roles: string[]
   permissions: string[]
   dataScope: string
+  /** 首登或管理员重置密码后为 true，需先修改密码 */
+  mustChangePassword: boolean
+}
+
+/** 登录页展示用：公司名称与 Logo（公开接口，无需登录） */
+export interface CompanyInfo {
+  name: string
+  logoUrl: string | null
 }
 
 export interface LoginResponse {
@@ -48,6 +56,8 @@ export interface RoleVO {
   dataScope: string
   enabled: boolean
   permissionIds: number[]
+  /** 模块级数据范围覆盖：moduleCode -> scope，缺省表示沿用 dataScope */
+  moduleScopes: Record<string, string>
 }
 
 export interface PermissionTreeNode {
@@ -129,9 +139,9 @@ export interface EmploymentRecordVO {
 export interface ChangeRequestVO {
   id: number
   requestNo: string
-  employeeId: number
-  employeeName: string
-  employeeNo: string
+  employeeId: number | null
+  employeeName: string | null
+  employeeNo: string | null
   changeType: string
   status: string
   effectiveDate: string
@@ -233,4 +243,14 @@ export interface DashboardSummary {
   pendingChangeCount: number
   myTeamCount: number
   myDraftReviewCount: number
+}
+
+/** 侧边栏菜单节点（由 /menus 按当前用户权限下发） */
+export interface MenuNode {
+  id: number
+  code: string
+  title: string
+  path: string | null
+  icon: string | null
+  children: MenuNode[]
 }

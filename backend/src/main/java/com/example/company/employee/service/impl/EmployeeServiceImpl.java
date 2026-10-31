@@ -2,11 +2,14 @@ package com.example.company.employee.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
+import com.example.company.audit.support.AuditDiff;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
@@ -38,11 +41,12 @@ public class EmployeeServiceImpl implements EmployeeService {
     private final DepartmentMapper departmentMapper;
     private final DataScopeService dataScopeService;
     private final AuditService auditService;
+    private final DictionaryService dictionaryService;
 
     @Override
     public PageResponse<EmployeeListItemVO> page(int page, int pageSize, String keyword, Long departmentId, String status) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        Set<Long> visible = dataScopeService.visibleEmployeeIds(current);
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(current, DataModule.EMPLOYEE);
         if (visible != null && visible.isEmpty()) {
             return PageResponse.of(List.of(), page, pageSize, 0);
         }
@@ -58,7 +62,7 @@ public class EmployeeServiceImpl implements EmployeeService {
             qw.in("department_id", dataScopeService.expandDepartmentIds(departmentId));
         }
         if (StringUtils.hasText(status)) {
-            // 支持逗号分隔多状态，如 "PROBATION,REGULAR,TRANSFERRED"（在职）或 "PENDING"（待入职）
+            // 支持逗号分隔多状态，如 "PROBATION,REGULAR"（在职）或 "PENDING"（待入职）
             List<String> statuses = java.util.Arrays.stream(status.split(","))
                     .map(String::trim).filter(StringUtils::hasText).toList();
             if (statuses.size() == 1) {
@@ -82,7 +86,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     public EmployeeDetailVO detail(Long id) {
         Employee employee = requireEmployee(id);
         LoginUser current = SecurityUtils.getCurrentUser();
-        if (!dataScopeService.canAccessEmployee(current, id)) {
+        if (!dataScopeService.canAccessEmployee(current, id, DataModule.EMPLOYEE)) {
             throw BusinessException.forbidden("无权查看该员工档案");
         }
         return toDetailVO(employee, canViewSensitive(current, id));
@@ -109,6 +113,8 @@ public class EmployeeServiceImpl implements EmployeeService {
         if (EmployeeStatus.RESIGNED.name().equals(employee.getEmploymentStatus())) {
             throw BusinessException.unprocessable("已离职员工档案不可编辑");
         }
+        // 修改前先取关键字段快照，写库后据此生成字段级变更写进审计摘要
+        AuditDiff.Snapshot before = AuditDiff.snapshot(employee);
         employee.setEmployeeName(request.getEmployeeName());
         employee.setGender(request.getGender());
         employee.setBirthDate(request.getBirthDate());
@@ -118,16 +124,31 @@ public class EmployeeServiceImpl implements EmployeeService {
         employee.setEmergencyContactName(request.getEmergencyContactName());
         employee.setEmergencyContactPhone(request.getEmergencyContactPhone());
         employee.setEducationCode(request.getEducationCode());
-        assertDepartmentActive(request.getDepartmentId());
-        employee.setDepartmentId(request.getDepartmentId());
-        employee.setPositionName(request.getPositionName());
+        // 部门/岗位属于调岗流程的产物：待入职阶段可直接修正，入职后只能通过 TRANSFER 申请变更
+        boolean preboarding = EmployeeStatus.PENDING.name().equals(employee.getEmploymentStatus());
+        if (request.getDepartmentId() != null) {
+            if (!preboarding && !request.getDepartmentId().equals(employee.getDepartmentId())) {
+                throw BusinessException.unprocessable("调整部门请提交调岗（TRANSFER）申请，档案编辑不能直接修改部门");
+            }
+            assertDepartmentActive(request.getDepartmentId());
+            employee.setDepartmentId(request.getDepartmentId());
+        }
+        if (StringUtils.hasText(request.getPositionName())) {
+            if (!preboarding && !request.getPositionName().equals(employee.getPositionName())) {
+                throw BusinessException.unprocessable("调整岗位请提交调岗（TRANSFER）申请，档案编辑不能直接修改岗位");
+            }
+            employee.setPositionName(request.getPositionName());
+        }
         employee.setPositionLevelCode(request.getPositionLevelCode());
+        assertDictionaries(request.getEducationCode(), request.getPositionLevelCode(), request.getGender());
         assertManagerValid(request.getManagerEmployeeId(), id);
         employee.setManagerEmployeeId(request.getManagerEmployeeId());
         employee.setHireDate(request.getHireDate());
         employee.setRemark(request.getRemark());
         employeeMapper.updateById(employee);
-        auditService.success("employee:update", "employee", id, "更新员工档案 " + employee.getEmployeeNo());
+        String diff = AuditDiff.describe(before, employee, this::formatAuditValue);
+        auditService.success("employee:update", "employee", id,
+                "更新员工档案 " + employee.getEmployeeNo() + (diff.isEmpty() ? "" : "；" + diff));
         return toDetailVO(employee, true);
     }
 
@@ -140,6 +161,26 @@ public class EmployeeServiceImpl implements EmployeeService {
         }
         employeeMapper.deleteById(id);
         auditService.success("employee:archive", "employee", id, "归档员工 " + employee.getEmployeeNo());
+    }
+
+    /** 审计变更的可读化：部门与直属主管显示名称而不是内部 ID */
+    private String formatAuditValue(String field, Object value) {
+        if ("departmentId".equals(field)) {
+            Department dept = departmentMapper.selectById((Long) value);
+            return dept == null ? null : dept.getDepartmentName();
+        }
+        if ("managerEmployeeId".equals(field)) {
+            Employee manager = employeeMapper.selectById((Long) value);
+            return manager == null ? null : manager.getEmployeeName();
+        }
+        return null;
+    }
+
+    /** 学历/职级/性别必须取自启用状态的字典项，避免写入 BACHELOR_X 这类脏值 */
+    private void assertDictionaries(String educationCode, String positionLevelCode, String gender) {
+        dictionaryService.validateDictionaryItem("EDUCATION", educationCode, "学历");
+        dictionaryService.validateDictionaryItem("POSITION_LEVEL", positionLevelCode, "职位层级");
+        dictionaryService.validateDictionaryItem("GENDER", gender, "性别");
     }
 
     public Employee requireEmployee(Long id) {
@@ -155,7 +196,8 @@ public class EmployeeServiceImpl implements EmployeeService {
         if (employeeId.equals(current.getEmployeeId())) {
             return true;
         }
-        return "ALL".equals(current.getDataScope()) || "DEPARTMENT".equals(current.getDataScope());
+        String scope = dataScopeService.effectiveScope(current, DataModule.EMPLOYEE);
+        return "ALL".equals(scope) || "DEPARTMENT".equals(scope);
     }
 
     private void apply(Employee employee, EmployeeCreateRequest request) {
@@ -173,6 +215,7 @@ public class EmployeeServiceImpl implements EmployeeService {
         employee.setDepartmentId(request.getDepartmentId());
         employee.setPositionName(request.getPositionName());
         employee.setPositionLevelCode(request.getPositionLevelCode());
+        assertDictionaries(request.getEducationCode(), request.getPositionLevelCode(), request.getGender());
         assertManagerValid(request.getManagerEmployeeId(), null);
         employee.setManagerEmployeeId(request.getManagerEmployeeId());
         employee.setHireDate(request.getHireDate());

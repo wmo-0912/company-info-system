@@ -1,12 +1,15 @@
 package com.example.company.employment;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
 import com.example.company.common.security.DataScopeService;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
+import com.example.company.dictionary.service.DictionaryService;
 import com.example.company.employee.entity.Employee;
 import com.example.company.employee.mapper.EmployeeMapper;
 import com.example.company.employment.dto.ChangeRequestCreateDTO;
@@ -16,20 +19,27 @@ import com.example.company.employment.entity.EmployeeEmploymentRecord;
 import com.example.company.employment.mapper.EmployeeChangeRequestMapper;
 import com.example.company.employment.mapper.EmployeeEmploymentRecordMapper;
 import com.example.company.employment.service.impl.EmploymentServiceImpl;
+import com.example.company.project.entity.ProjectTeamMember;
+import com.example.company.project.mapper.ProjectTeamMemberMapper;
+import com.example.company.user.entity.SysUser;
 import com.example.company.user.mapper.SysUserMapper;
+import com.example.company.user.service.AccountProvisioningService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.example.company.common.security.LoginUser;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +47,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,11 +62,17 @@ class EmploymentServiceImplTest {
     @Mock
     private DepartmentMapper departmentMapper;
     @Mock
+    private ProjectTeamMemberMapper projectMemberMapper;
+    @Mock
     private SysUserMapper userMapper;
     @Mock
     private DataScopeService dataScopeService;
     @Mock
     private AuditService auditService;
+    @Mock
+    private DictionaryService dictionaryService;
+    @Mock
+    private AccountProvisioningService accountProvisioningService;
 
     @InjectMocks
     private EmploymentServiceImpl service;
@@ -95,10 +112,66 @@ class EmploymentServiceImplTest {
         req.setEmployeeId(10L);
         req.setChangeType(type);
         req.setStatus("SUBMITTED");
-        req.setEffectiveDate(LocalDate.now().plusDays(1));
+        req.setEffectiveDate(LocalDate.now());
         req.setPayload(new HashMap<>());
         req.setSubmittedBy(1L);
         return req;
+    }
+
+    private void authenticateAsHrWithEmployeeId(Long employeeId) {
+        LoginUser user = new LoginUser();
+        user.setUserId(2L);
+        user.setEmployeeId(employeeId);
+        user.setUsername("hr");
+        user.setRoles(Set.of("HR"));
+        user.setPermissions(Set.of("employment:submit", "employment:process"));
+        user.setDataScope("ALL");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null, List.of()));
+    }
+
+    @Test
+    void approveRejectsFutureEffectiveDate() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        EmployeeChangeRequest req = submittedRequest("REGULARIZE");
+        req.setEffectiveDate(LocalDate.now().plusDays(3));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.process(100L, dto));
+
+        assertEquals(422, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("尚未到达"), ex.getMessage());
+        assertEquals(EmployeeStatus.PROBATION.name(), e.getEmploymentStatus());
+        verify(employeeMapper, never()).updateById(any(Employee.class));
+    }
+
+    @Test
+    void rejectAllowsFutureEffectiveDate() {
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        req.setEffectiveDate(LocalDate.now().plusDays(30));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("REJECT");
+
+        service.process(100L, dto);
+
+        assertEquals("REJECTED", req.getStatus());
+    }
+
+    @Test
+    void cannotProcessRequestAboutSelf() {
+        authenticateAsHrWithEmployeeId(10L);
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.process(100L, dto));
+
+        assertEquals(403, ex.getHttpStatus());
+        verify(employeeMapper, never()).updateById(any(Employee.class));
     }
 
     @Test
@@ -111,6 +184,75 @@ class EmploymentServiceImplTest {
         dto.setEffectiveDate(LocalDate.now());
         BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
         assertEquals(422, ex.getHttpStatus());
+    }
+
+    @Test
+    void regularizeRejectsUnexpectedPayloadKeys() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("REGULARIZE");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("targetDepartmentId"), ex.getMessage());
+        verify(requestMapper, never()).insert(any(EmployeeChangeRequest.class));
+    }
+
+    @Test
+    void transferRejectsBlankTargetPositionName() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("TRANSFER");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L, "targetPositionName", "   "));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("目标岗位名称"), ex.getMessage());
+    }
+
+    @Test
+    void transferRejectsOverlongTargetPositionName() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("TRANSFER");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("targetDepartmentId", 2L, "targetPositionName", "岗".repeat(101)));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+    }
+
+    @Test
+    void approvedRequestKeepsInternalSnapshotKeyAllowed() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        EmployeeChangeRequest req = submittedRequest("TRANSFER");
+        req.getPayload().put("targetDepartmentId", 2L);
+        req.getPayload().put("snapshot", Map.of("oldDepartmentId", 1L));
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        Department target = new Department();
+        target.setId(2L);
+        target.setStatus("ACTIVE");
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        service.process(100L, dto);
+
+        assertEquals(2L, e.getDepartmentId());
+        assertEquals("APPROVED", req.getStatus());
     }
 
     @Test
@@ -174,10 +316,76 @@ class EmploymentServiceImplTest {
 
         assertEquals(2L, e.getDepartmentId());
         assertEquals("高级后端工程师", e.getPositionName());
-        assertEquals(EmployeeStatus.TRANSFERRED.name(), e.getEmploymentStatus());
+        assertEquals(EmployeeStatus.REGULAR.name(), e.getEmploymentStatus(), "调岗不应改变在职状态");
         verify(employeeMapper).updateById(e);
         verify(recordMapper).insert(any(EmployeeEmploymentRecord.class));
         assertEquals("APPROVED", req.getStatus());
+    }
+
+    @Test
+    void approveTransferKeepsProbationStatus() {
+        Employee e = employeeWithStatus(EmployeeStatus.PROBATION.name());
+        Department target = new Department();
+        target.setId(2L);
+        target.setStatus("ACTIVE");
+        EmployeeChangeRequest req = submittedRequest("TRANSFER");
+        req.getPayload().put("targetDepartmentId", 2L);
+
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(departmentMapper.selectById(2L)).thenReturn(target);
+
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+        service.process(100L, dto);
+
+        assertEquals(EmployeeStatus.PROBATION.name(), e.getEmploymentStatus(), "试用期调岗后仍是试用期");
+    }
+
+    @Test
+    void createRetriesWhenRequestNoCollides() {
+        Employee e = employeeWithStatus(EmployeeStatus.PENDING.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        // 用 Answer 记录每次调用时的申请号：入参是同一个实体，事后再取只能看到最后一次的号
+        List<String> numbers = new ArrayList<>();
+        when(requestMapper.insert(any(EmployeeChangeRequest.class))).thenAnswer(invocation -> {
+            EmployeeChangeRequest r = invocation.getArgument(0);
+            numbers.add(r.getRequestNo());
+            if (numbers.size() == 1) {
+                throw new DuplicateKeyException("duplicate request_no");
+            }
+            return 1;
+        });
+
+        service.create(onboardDto());
+
+        assertEquals(2, numbers.size());
+        assertNotEquals(numbers.get(0), numbers.get(1), "重试必须重新取号");
+        verify(auditService).success(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFailsWith409WhenRequestNoKeepsColliding() {
+        Employee e = employeeWithStatus(EmployeeStatus.PENDING.name());
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(requestMapper.insert(any(EmployeeChangeRequest.class)))
+                .thenThrow(new DuplicateKeyException("duplicate request_no"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(onboardDto()));
+
+        assertEquals(409, ex.getHttpStatus());
+        verify(requestMapper, times(3)).insert(any(EmployeeChangeRequest.class));
+        verify(auditService, never()).success(any(), any(), any(), any());
+    }
+
+    private ChangeRequestCreateDTO onboardDto() {
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setEmployeeId(10L);
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        return dto;
     }
 
     @Test
@@ -206,6 +414,35 @@ class EmploymentServiceImplTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void resignCascadesAccountMembershipAndManager() {
+        Employee e = employeeWithStatus(EmployeeStatus.REGULAR.name());
+        EmployeeChangeRequest req = submittedRequest("RESIGN");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+
+        service.process(100L, dto);
+
+        ArgumentCaptor<Wrapper<SysUser>> userCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(userMapper).update(isNull(), userCaptor.capture());
+        UpdateWrapper<SysUser> userUpdate = (UpdateWrapper<SysUser>) userCaptor.getValue();
+        assertTrue(userUpdate.getSqlSet().contains("status"), userUpdate.getSqlSet());
+        assertTrue(userUpdate.getParamNameValuePairs().containsValue("DISABLED"));
+
+        ArgumentCaptor<Wrapper<ProjectTeamMember>> memberCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(projectMemberMapper).update(isNull(), memberCaptor.capture());
+        UpdateWrapper<ProjectTeamMember> memberUpdate = (UpdateWrapper<ProjectTeamMember>) memberCaptor.getValue();
+        assertTrue(memberUpdate.getSqlSet().contains("left_at"), memberUpdate.getSqlSet());
+        assertTrue(memberUpdate.getParamNameValuePairs().containsValue(req.getEffectiveDate()));
+
+        ArgumentCaptor<Wrapper<Department>> deptCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(departmentMapper).update(isNull(), deptCaptor.capture());
+        assertTrue(((UpdateWrapper<Department>) deptCaptor.getValue()).getSqlSet().contains("manager_employee_id"));
+    }
+
+    @Test
     void cannotProcessTwice() {
         EmployeeChangeRequest req = submittedRequest("REGULARIZE");
         req.setStatus("APPROVED");
@@ -228,5 +465,200 @@ class EmploymentServiceImplTest {
         service.create(dto);
         verify(requestMapper).insert(argThat((EmployeeChangeRequest r) ->
                 r.getRequestNo() != null && r.getRequestNo().startsWith("CR")));
+    }
+
+    // ==================== 入职流程建档（3.2-7） ====================
+
+    private Map<String, Object> hirePayload() {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("employeeNo", "E0201");
+        payload.put("employeeName", "赵六");
+        payload.put("departmentId", 1L);
+        payload.put("gender", "MALE");
+        payload.put("birthDate", "1998-03-04");
+        payload.put("positionName", "测试工程师");
+        return payload;
+    }
+
+    private Department activeDepartment() {
+        Department dept = new Department();
+        dept.setId(1L);
+        dept.setDepartmentName("研发部");
+        dept.setStatus("ACTIVE");
+        return dept;
+    }
+
+    @Test
+    void onlyOnboardingMayOmitEmployee() {
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setChangeType("REGULARIZE");
+        dto.setEffectiveDate(LocalDate.now());
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("仅入职"), ex.getMessage());
+        verify(requestMapper, never()).insert(any(EmployeeChangeRequest.class));
+    }
+
+    @Test
+    void onboardingWithoutEmployeeRequiresEmployeeNo() {
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(Map.of("employeeName", "赵六"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(400, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("工号"), ex.getMessage());
+    }
+
+    @Test
+    void onboardingWithoutEmployeeRejectsDuplicateEmployeeNo() {
+        when(departmentMapper.selectById(1L)).thenReturn(activeDepartment());
+        when(employeeMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(hirePayload());
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(409, ex.getHttpStatus());
+        verify(requestMapper, never()).insert(any(EmployeeChangeRequest.class));
+    }
+
+    @Test
+    void onboardingWithoutEmployeeRejectsDuplicateInFlightRequest() {
+        when(departmentMapper.selectById(1L)).thenReturn(activeDepartment());
+        when(employeeMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(hirePayload());
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.create(dto));
+
+        assertEquals(409, ex.getHttpStatus());
+        assertTrue(ex.getMessage().contains("进行中的入职申请"), ex.getMessage());
+    }
+
+    @Test
+    void onboardingWithoutEmployeeSavesDraftWithoutEmployeeId() {
+        when(departmentMapper.selectById(1L)).thenReturn(activeDepartment());
+        when(employeeMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(requestMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        ChangeRequestCreateDTO dto = new ChangeRequestCreateDTO();
+        dto.setChangeType("ONBOARD");
+        dto.setEffectiveDate(LocalDate.now());
+        dto.setPayload(hirePayload());
+
+        service.create(dto);
+
+        verify(requestMapper).insert(argThat((EmployeeChangeRequest r) -> r.getEmployeeId() == null
+                && "ONBOARD".equals(r.getChangeType())
+                && "E0201".equals(r.getPayload().get("employeeNo"))));
+        verify(employeeMapper, never()).insert(any(Employee.class));
+    }
+
+    @Test
+    void approvingNewHireCreatesEmployeeAndProvisionsAccount() {
+        EmployeeChangeRequest req = submittedRequest("ONBOARD");
+        req.setEmployeeId(null);
+        req.setPayload(hirePayload());
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(departmentMapper.selectById(1L)).thenReturn(activeDepartment());
+        when(employeeMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(employeeMapper.insert(any(Employee.class))).thenAnswer(invocation -> {
+            Employee created = invocation.getArgument(0);
+            created.setId(55L);
+            return 1;
+        });
+        when(accountProvisioningService.provision(any(Employee.class)))
+                .thenReturn(new AccountProvisioningService.Result(true, "E0201", "已开通账号 E0201"));
+
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+        service.process(100L, dto);
+
+        ArgumentCaptor<Employee> captor = ArgumentCaptor.forClass(Employee.class);
+        verify(employeeMapper).insert(captor.capture());
+        Employee created = captor.getValue();
+        assertEquals("E0201", created.getEmployeeNo());
+        assertEquals("赵六", created.getEmployeeName());
+        assertEquals(1L, created.getDepartmentId());
+        assertEquals("MALE", created.getGender());
+        assertEquals(LocalDate.of(1998, 3, 4), created.getBirthDate());
+        assertEquals("测试工程师", created.getPositionName());
+        assertEquals(EmployeeStatus.PROBATION.name(), created.getEmploymentStatus());
+        assertEquals(req.getEffectiveDate(), created.getHireDate());
+        assertEquals(55L, req.getEmployeeId(), "批准后申请必须回填员工 ID");
+        assertEquals("APPROVED", req.getStatus());
+        verify(accountProvisioningService).provision(created);
+        verify(recordMapper).insert(any(EmployeeEmploymentRecord.class));
+        verify(auditService).success(eq("employment:approve"), any(), any(),
+                argThat(detail -> detail.contains("已开通账号 E0201")));
+    }
+
+    @Test
+    void approvingOnboardingOfExistingEmployeeStillProvisionsAccount() {
+        Employee e = employeeWithStatus(EmployeeStatus.PENDING.name());
+        EmployeeChangeRequest req = submittedRequest("ONBOARD");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(employeeMapper.selectById(10L)).thenReturn(e);
+        when(accountProvisioningService.provision(any(Employee.class)))
+                .thenReturn(new AccountProvisioningService.Result(false, null, "该员工已有登录账号，无需重复开通"));
+
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+        service.process(100L, dto);
+
+        assertEquals(EmployeeStatus.PROBATION.name(), e.getEmploymentStatus());
+        verify(employeeMapper, never()).insert(any(Employee.class));
+        verify(accountProvisioningService).provision(e);
+    }
+
+    @Test
+    void approvingNewHireWithTakenEmployeeNoStillFails() {
+        EmployeeChangeRequest req = submittedRequest("ONBOARD");
+        req.setEmployeeId(null);
+        req.setPayload(hirePayload());
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(departmentMapper.selectById(1L)).thenReturn(activeDepartment());
+        when(employeeMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+
+        ChangeRequestProcessDTO dto = new ChangeRequestProcessDTO();
+        dto.setDecision("APPROVE");
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.process(100L, dto));
+
+        assertEquals(409, ex.getHttpStatus());
+        verify(employeeMapper, never()).insert(any(Employee.class));
+        verify(accountProvisioningService, never()).provision(any());
+    }
+
+    @Test
+    void detailOfUnassignedOnboardingVisibleToSubmitter() {
+        EmployeeChangeRequest req = submittedRequest("ONBOARD");
+        req.setEmployeeId(null);
+        req.setStatus("DRAFT");
+        when(requestMapper.selectById(100L)).thenReturn(req);
+
+        assertNull(service.detail(100L).getEmployeeId());
+        verify(dataScopeService, never()).canAccessEmployee(any(), any(), any());
+    }
+
+    @Test
+    void detailOfUnassignedOnboardingRejectedForOutsider() {
+        EmployeeChangeRequest req = submittedRequest("ONBOARD");
+        req.setEmployeeId(null);
+        req.setSubmittedBy(999L);
+        when(requestMapper.selectById(100L)).thenReturn(req);
+        when(dataScopeService.canAccessEmployee(any(), isNull(), any())).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.detail(100L));
+
+        assertEquals(403, ex.getHttpStatus());
     }
 }

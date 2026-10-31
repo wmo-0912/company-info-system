@@ -4,6 +4,8 @@ import com.example.company.common.api.ApiResponse;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -72,6 +74,22 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleNotFound(Exception e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResponse.error("NOT_FOUND", "资源不存在"));
+    }
+
+    /** 唯一约束冲突统一映射 409，避免并发下露出 500 */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDuplicateKey(DuplicateKeyException e) {
+        log.warn("Unique constraint violated: {}", e.getMostSpecificCause().getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error("DUPLICATE_KEY", "数据已存在，请勿重复提交"));
+    }
+
+    /** 外键/非空/长度等约束错误映射 400，给前端可操作提示 */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIntegrityViolation(DataIntegrityViolationException e) {
+        log.warn("Data integrity violation: {}", e.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error("DATA_INTEGRITY_VIOLATION", "数据不符合约束：可能存在必填项缺失、关联数据不存在或内容超长"));
     }
 
     @ExceptionHandler(Exception.class)

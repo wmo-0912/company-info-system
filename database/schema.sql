@@ -11,12 +11,24 @@ CREATE TABLE sys_user (
     password_hash      VARCHAR(100) NOT NULL,
     employee_id        BIGINT       NULL UNIQUE,
     status             VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE', -- ACTIVE / DISABLED / LOCKED
+    must_change_password BOOLEAN    NOT NULL DEFAULT FALSE, -- 首次登录/管理员重置后强制改密
     last_login_at      TIMESTAMPTZ  NULL,
     failed_login_count INT          NOT NULL DEFAULT 0,
+    token_version      INT          NOT NULL DEFAULT 0, -- 会话版本：改密/重置/禁用时 +1，旧 token 立即失效
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted            BOOLEAN      NOT NULL DEFAULT FALSE
 );
+
+-- 历史密码指纹：改密/重置时写入，仅保留最近 5 条，用于阻止改回旧密码
+CREATE TABLE sys_password_history (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id       BIGINT       NOT NULL REFERENCES sys_user (id),
+    password_hash VARCHAR(100) NOT NULL,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_password_history_user ON sys_password_history (user_id, id DESC);
 
 CREATE TABLE sys_role (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -53,6 +65,15 @@ CREATE TABLE sys_role_permission (
     permission_id BIGINT NOT NULL REFERENCES sys_permission (id),
     PRIMARY KEY (role_id, permission_id)
 );
+
+-- 角色在单个模块上的数据范围覆盖（未配置的模块沿用 sys_role.data_scope）
+CREATE TABLE sys_role_module_scope (
+    role_id     BIGINT      NOT NULL REFERENCES sys_role (id) ON DELETE CASCADE,
+    module_code VARCHAR(32) NOT NULL, -- DataModule 枚举：EMPLOYEE/DEPARTMENT/PROJECT/PERFORMANCE/EMPLOYMENT
+    scope_type  VARCHAR(20) NOT NULL, -- ALL/DEPARTMENT/PROJECT/SELF
+    PRIMARY KEY (role_id, module_code)
+);
+
 
 CREATE TABLE sys_config (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -111,7 +132,7 @@ CREATE TABLE employee (
     position_level_code      VARCHAR(64)  NULL,
     manager_employee_id      BIGINT       NULL REFERENCES employee (id),
     hire_date                DATE         NULL,
-    employment_status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING/PROBATION/REGULAR/TRANSFERRED/RESIGNED
+    employment_status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING/PROBATION/REGULAR/RESIGNED（调岗不改变状态）
     resignation_date         DATE         NULL,
     remark                   TEXT         NULL,
     created_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -147,7 +168,7 @@ CREATE INDEX idx_record_employee_date ON employee_employment_record (employee_id
 CREATE TABLE employee_change_request (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     request_no      VARCHAR(40)  NOT NULL UNIQUE,
-    employee_id     BIGINT       NOT NULL REFERENCES employee (id),
+    employee_id     BIGINT       NULL REFERENCES employee (id), -- 入职申请可先不带员工，批准时才建档
     change_type     VARCHAR(20)  NOT NULL, -- ONBOARD / REGULARIZE / TRANSFER / RESIGN
     status          VARCHAR(20)  NOT NULL DEFAULT 'DRAFT', -- DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED
     effective_date  DATE         NOT NULL,
@@ -229,6 +250,33 @@ CREATE TABLE performance_review (
     UNIQUE (employee_id, reviewer_employee_id, period_type, period_key)
 );
 
+-- 绩效周期锁定：只登记被显式锁定/解锁过的周期，未登记的周期视为未锁定
+CREATE TABLE performance_period (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    period_key VARCHAR(20) NOT NULL UNIQUE, -- 例如 2026-09 / 2026-Q3，与 performance_review.period_key 对应
+    locked     BOOLEAN     NOT NULL DEFAULT FALSE,
+    locked_at  TIMESTAMPTZ NULL,
+    locked_by  BIGINT      NULL REFERENCES sys_user (id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+-- 绩效申诉：员工对已提交评价有异议时提出，人事受理（退回评价人复核）或驳回
+CREATE TABLE performance_appeal (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    review_id           BIGINT       NOT NULL REFERENCES performance_review (id) ON DELETE CASCADE,
+    employee_id         BIGINT       NOT NULL REFERENCES employee (id),
+    reason              VARCHAR(500) NOT NULL,
+    status              VARCHAR(20)  NOT NULL DEFAULT 'PENDING', -- PENDING / ACCEPTED / REJECTED
+    handler_employee_id BIGINT       NULL REFERENCES employee (id),
+    handle_comment      VARCHAR(500) NULL,
+    handled_at          TIMESTAMPTZ  NULL,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
 CREATE INDEX idx_review_employee_period ON performance_review (employee_id, period_type, period_key);
+CREATE INDEX idx_appeal_review ON performance_appeal (review_id);
+CREATE INDEX idx_appeal_status ON performance_appeal (status, created_at);
 
 COMMIT;

@@ -3,8 +3,10 @@ package com.example.company.performance.controller;
 import com.example.company.common.api.ApiResponse;
 import com.example.company.common.api.PageResponse;
 import com.example.company.performance.dto.PerformanceReviewRequest;
+import com.example.company.performance.dto.ReturnReviewRequest;
 import com.example.company.performance.service.PerformanceService;
 import com.example.company.performance.vo.PerformanceReviewVO;
+import com.example.company.performance.vo.PerformanceSummaryVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -43,6 +45,14 @@ public class PerformanceController {
         return ApiResponse.ok(performanceService.my(page, pageSize));
     }
 
+    @Operation(summary = "绩效汇总（按周期统计，含部门/项目组维度）")
+    @GetMapping("/summary")
+    @PreAuthorize("hasAuthority('performance:review')")
+    public ApiResponse<PerformanceSummaryVO> summary(@RequestParam(required = false) String periodType,
+                                                     @RequestParam(required = false) String periodKey) {
+        return ApiResponse.ok(performanceService.summary(periodType, periodKey));
+    }
+
     @Operation(summary = "绩效详情")
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('performance:read')")
@@ -70,5 +80,14 @@ public class PerformanceController {
     @PreAuthorize("hasAuthority('performance:submit')")
     public ApiResponse<PerformanceReviewVO> submit(@PathVariable Long id) {
         return ApiResponse.ok(performanceService.submit(id));
+    }
+
+    @Operation(summary = "退回评价（人事复核）")
+    @PostMapping("/{id}/return")
+    @PreAuthorize("hasAuthority('performance:review')")
+    public ApiResponse<PerformanceReviewVO> returnForRevision(@PathVariable Long id,
+                                                             @Valid @RequestBody(required = false)
+                                                             ReturnReviewRequest request) {
+        return ApiResponse.ok(performanceService.returnForRevision(id, request == null ? null : request.getReason()));
     }
 }

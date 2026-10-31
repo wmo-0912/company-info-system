@@ -2,10 +2,12 @@ package com.example.company.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
+import com.example.company.common.security.DataScopeService;
 import com.example.company.common.security.LoginUser;
 import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.entity.Department;
@@ -28,8 +30,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -41,6 +47,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final ProjectTeamMemberMapper memberMapper;
     private final EmployeeMapper employeeMapper;
     private final DepartmentMapper departmentMapper;
+    private final DataScopeService dataScopeService;
     private final AuditService auditService;
 
     @Override
@@ -48,7 +55,7 @@ public class ProjectServiceImpl implements ProjectService {
         LoginUser current = SecurityUtils.getCurrentUser();
         QueryWrapper<ProjectTeam> qw = new QueryWrapper<>();
         // PROJECT 数据范围：仅自己负责或自己参与的项目组
-        if ("PROJECT".equals(current.getDataScope()) && current.getEmployeeId() != null) {
+        if ("PROJECT".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT)) && current.getEmployeeId() != null) {
             List<Long> memberTeamIds = memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
                             .eq("employee_id", current.getEmployeeId()).isNull("left_at"))
                     .stream().map(ProjectTeamMember::getProjectTeamId).toList();
@@ -58,7 +65,7 @@ public class ProjectServiceImpl implements ProjectService {
                     w.or().in("id", memberTeamIds);
                 }
             });
-        } else if ("SELF".equals(current.getDataScope())) {
+        } else if ("SELF".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT))) {
             if (current.getEmployeeId() == null) {
                 return PageResponse.of(List.of(), page, pageSize, 0);
             }
@@ -78,12 +85,14 @@ public class ProjectServiceImpl implements ProjectService {
         }
         qw.orderByAsc("project_code");
         Page<ProjectTeam> result = teamMapper.selectPage(new Page<>(page, pageSize), qw);
-        return PageResponse.from(result, this::toVO);
+        return PageResponse.of(toVOs(result.getRecords()), result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     @Override
     public ProjectVO detail(Long id) {
-        return toVO(requireTeam(id));
+        ProjectTeam team = requireTeam(id);
+        assertVisible(team);
+        return toVO(team);
     }
 
     @Override
@@ -119,11 +128,30 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
+    @Transactional
+    public ProjectVO updateStatus(Long id, String status) {
+        ProjectTeam team = requireTeam(id);
+        assertManageable(team);
+        if (!"ACTIVE".equals(status) && !"CLOSED".equals(status)) {
+            throw BusinessException.badRequest("状态只能是 ACTIVE 或 CLOSED");
+        }
+        if (status.equals(team.getStatus())) {
+            return toVO(team);
+        }
+        team.setStatus(status);
+        teamMapper.updateById(team);
+        auditService.success("project:status", "project", id,
+                ("CLOSED".equals(status) ? "关闭项目组 " : "重新开启项目组 ") + team.getProjectName());
+        return toVO(team);
+    }
+
+    @Override
     public List<ProjectMemberVO> members(Long id) {
-        requireTeam(id);
+        ProjectTeam team = requireTeam(id);
+        assertVisible(team);
         List<ProjectTeamMember> members = memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
                 .eq("project_team_id", id).orderByAsc("joined_at"));
-        return members.stream().map(this::toMemberVO).toList();
+        return toMemberVOs(members);
     }
 
     @Override
@@ -142,7 +170,7 @@ public class ProjectServiceImpl implements ProjectService {
         member.setProjectTeamId(id);
         member.setEmployeeId(request.getEmployeeId());
         member.setMemberRole(request.getMemberRole());
-        member.setJoinedAt(LocalDate.now());
+        member.setJoinedAt(request.getJoinedAt() == null ? LocalDate.now() : request.getJoinedAt());
         try {
             memberMapper.insert(member);
         } catch (DuplicateKeyException e) {
@@ -154,7 +182,7 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     @Transactional
-    public void removeMember(Long id, Long employeeId) {
+    public void removeMember(Long id, Long employeeId, LocalDate leftAt) {
         ProjectTeam team = requireTeam(id);
         assertManageable(team);
         ProjectTeamMember member = memberMapper.selectOne(new QueryWrapper<ProjectTeamMember>()
@@ -162,9 +190,14 @@ public class ProjectServiceImpl implements ProjectService {
         if (member == null) {
             throw BusinessException.notFound("该员工不是项目组有效成员");
         }
-        member.setLeftAt(LocalDate.now());
+        LocalDate leaveDate = leftAt == null ? LocalDate.now() : leftAt;
+        if (member.getJoinedAt() != null && leaveDate.isBefore(member.getJoinedAt())) {
+            throw BusinessException.badRequest("离开日期不能早于加入日期 " + member.getJoinedAt());
+        }
+        member.setLeftAt(leaveDate);
         memberMapper.updateById(member);
-        auditService.success("project:member:remove", "project", id, "移除成员员工ID=" + employeeId);
+        auditService.success("project:member:remove", "project", id,
+                "移除成员员工ID=" + employeeId + "，离开日期 " + leaveDate);
     }
 
     @Override
@@ -183,13 +216,21 @@ public class ProjectServiceImpl implements ProjectService {
         Map<Long, ProjectTeam> all = new java.util.LinkedHashMap<>();
         managed.forEach(t -> all.put(t.getId(), t));
         joined.forEach(t -> all.put(t.getId(), t));
-        return all.values().stream().map(this::toVO).toList();
+        return toVOs(new ArrayList<>(all.values()));
+    }
+
+    /** 读操作校验：项目组必须在当前用户数据范围内，避免按 ID 直查越权 */
+    private void assertVisible(ProjectTeam team) {
+        if (!dataScopeService.canAccessProject(SecurityUtils.getCurrentUser(), team, DataModule.PROJECT)) {
+            throw BusinessException.forbidden("无权查看该项目组");
+        }
     }
 
     /** 管理操作校验：拥有全局权限或本人是负责人 */
     private void assertManageable(ProjectTeam team) {
         LoginUser current = SecurityUtils.getCurrentUser();
-        if (current.hasPermission("project:update") && !"PROJECT".equals(current.getDataScope())) {
+        if (current.hasPermission("project:update")
+                && !"PROJECT".equals(dataScopeService.effectiveScope(current, DataModule.PROJECT))) {
             return;
         }
         if (current.getEmployeeId() != null && current.getEmployeeId().equals(team.getManagerEmployeeId())) {
@@ -223,31 +264,93 @@ public class ProjectServiceImpl implements ProjectService {
         }
     }
 
+    /** 批量组装：负责人姓名与在职成员数一次查回，避免每行两次查询（列表页 N+1） */
+    private List<ProjectVO> toVOs(List<ProjectTeam> teams) {
+        if (teams.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> managerIds = teams.stream().map(ProjectTeam::getManagerEmployeeId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Employee> managers = managerIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(managerIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        List<Long> teamIds = teams.stream().map(ProjectTeam::getId).toList();
+        Map<Long, Integer> counts = new LinkedHashMap<>();
+        if (!teamIds.isEmpty()) {
+            memberMapper.selectList(new QueryWrapper<ProjectTeamMember>()
+                            .in("project_team_id", teamIds).isNull("left_at"))
+                    .forEach(m -> counts.merge(m.getProjectTeamId(), 1, Integer::sum));
+        }
+        List<ProjectVO> list = new ArrayList<>(teams.size());
+        for (ProjectTeam team : teams) {
+            list.add(buildVO(team, managers.get(team.getManagerEmployeeId()),
+                    counts.getOrDefault(team.getId(), 0)));
+        }
+        return list;
+    }
+
+    /** 批量组装成员：员工与部门各一次查回 */
+    private List<ProjectMemberVO> toMemberVOs(List<ProjectTeamMember> members) {
+        if (members.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> employeeIds = members.stream().map(ProjectTeamMember::getEmployeeId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Employee> employees = employeeIds.isEmpty() ? Map.of()
+                : employeeMapper.selectBatchIds(employeeIds).stream()
+                        .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Set<Long> deptIds = employees.values().stream().map(Employee::getDepartmentId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, Department> departments = deptIds.isEmpty() ? Map.of()
+                : departmentMapper.selectBatchIds(deptIds).stream()
+                        .collect(Collectors.toMap(Department::getId, Function.identity()));
+        List<ProjectMemberVO> list = new ArrayList<>(members.size());
+        for (ProjectTeamMember member : members) {
+            Employee employee = employees.get(member.getEmployeeId());
+            Department dept = employee == null || employee.getDepartmentId() == null
+                    ? null : departments.get(employee.getDepartmentId());
+            list.add(buildMemberVO(member, employee, dept));
+        }
+        return list;
+    }
+
     private ProjectVO toVO(ProjectTeam team) {
+        Employee manager = team.getManagerEmployeeId() == null ? null
+                : employeeMapper.selectById(team.getManagerEmployeeId());
+        int memberCount = Math.toIntExact(memberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
+                .eq("project_team_id", team.getId()).isNull("left_at")));
+        return buildVO(team, manager, memberCount);
+    }
+
+    private ProjectVO buildVO(ProjectTeam team, Employee manager, int memberCount) {
         ProjectVO vo = new ProjectVO();
         vo.setId(team.getId());
         vo.setProjectCode(team.getProjectCode());
         vo.setProjectName(team.getProjectName());
         vo.setManagerEmployeeId(team.getManagerEmployeeId());
-        Employee manager = employeeMapper.selectById(team.getManagerEmployeeId());
         vo.setManagerEmployeeName(manager == null ? null : manager.getEmployeeName());
         vo.setDescription(team.getDescription());
         vo.setStatus(team.getStatus());
-        vo.setMemberCount(Math.toIntExact(memberMapper.selectCount(new QueryWrapper<ProjectTeamMember>()
-                .eq("project_team_id", team.getId()).isNull("left_at"))));
+        vo.setMemberCount(memberCount);
         return vo;
     }
 
     private ProjectMemberVO toMemberVO(ProjectTeamMember member) {
+        Employee employee = member.getEmployeeId() == null ? null
+                : employeeMapper.selectById(member.getEmployeeId());
+        Department dept = employee == null || employee.getDepartmentId() == null ? null
+                : departmentMapper.selectById(employee.getDepartmentId());
+        return buildMemberVO(member, employee, dept);
+    }
+
+    private ProjectMemberVO buildMemberVO(ProjectTeamMember member, Employee employee, Department dept) {
         ProjectMemberVO vo = new ProjectMemberVO();
         vo.setId(member.getId());
         vo.setProjectTeamId(member.getProjectTeamId());
         vo.setEmployeeId(member.getEmployeeId());
-        Employee employee = employeeMapper.selectById(member.getEmployeeId());
         if (employee != null) {
             vo.setEmployeeNo(employee.getEmployeeNo());
             vo.setEmployeeName(employee.getEmployeeName());
-            Department dept = departmentMapper.selectById(employee.getDepartmentId());
             vo.setDepartmentName(dept == null ? null : dept.getDepartmentName());
         }
         vo.setMemberRole(member.getMemberRole());

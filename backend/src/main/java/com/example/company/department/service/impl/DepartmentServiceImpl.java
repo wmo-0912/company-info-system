@@ -2,10 +2,13 @@ package com.example.company.department.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.company.common.enums.DataModule;
 import com.example.company.audit.service.AuditService;
 import com.example.company.common.api.PageResponse;
 import com.example.company.common.enums.EmployeeStatus;
 import com.example.company.common.exception.BusinessException;
+import com.example.company.common.security.DataScopeService;
+import com.example.company.common.security.SecurityUtils;
 import com.example.company.department.dto.DepartmentRequest;
 import com.example.company.department.entity.Department;
 import com.example.company.department.mapper.DepartmentMapper;
@@ -30,13 +33,16 @@ public class DepartmentServiceImpl implements DepartmentService {
 
     private final DepartmentMapper departmentMapper;
     private final EmployeeMapper employeeMapper;
+    private final DataScopeService dataScopeService;
     private final AuditService auditService;
 
     @Override
     public List<DepartmentVO> tree() {
         List<Department> all = departmentMapper.selectList(new QueryWrapper<Department>().orderByAsc("department_code"));
+        // 负责人姓名一次批量查回，避免按节点逐个 selectById（部门树最深也只有几层，全表取回在内存建树）
+        Map<Long, String> managerNames = managerNames(all.stream().map(Department::getManagerEmployeeId).toList());
         Map<Long, DepartmentVO> nodes = all.stream()
-                .map(this::toVO)
+                .map(dept -> toVO(dept, managerNames))
                 .collect(Collectors.toMap(DepartmentVO::getId, Function.identity()));
         List<DepartmentVO> roots = new ArrayList<>();
         for (DepartmentVO node : nodes.values()) {
@@ -60,7 +66,12 @@ public class DepartmentServiceImpl implements DepartmentService {
         }
         qw.orderByAsc("department_code");
         Page<Department> result = departmentMapper.selectPage(new Page<>(page, pageSize), qw);
-        return PageResponse.from(result, this::toVO);
+        Map<Long, String> managerNames = managerNames(
+                result.getRecords().stream().map(Department::getManagerEmployeeId).toList());
+        List<DepartmentVO> records = result.getRecords().stream()
+                .map(dept -> toVO(dept, managerNames))
+                .toList();
+        return PageResponse.of(records, result.getCurrent(), result.getSize(), result.getTotal());
     }
 
     @Override
@@ -126,7 +137,15 @@ public class DepartmentServiceImpl implements DepartmentService {
     @Override
     public PageResponse<EmployeeListItemVO> employees(Long id, int page, int pageSize, String status) {
         requireDepartment(id);
+        // 部门维度列表同样受数据权限约束，否则可绕过员工列表按部门 ID 直查全员
+        Set<Long> visible = dataScopeService.visibleEmployeeIds(SecurityUtils.getCurrentUser(), DataModule.EMPLOYEE);
+        if (visible != null && visible.isEmpty()) {
+            return PageResponse.of(List.of(), page, pageSize, 0);
+        }
         QueryWrapper<Employee> qw = new QueryWrapper<Employee>().eq("department_id", id);
+        if (visible != null) {
+            qw.in("id", visible);
+        }
         if (org.springframework.util.StringUtils.hasText(status)) {
             List<String> statuses = java.util.Arrays.stream(status.split(","))
                     .map(String::trim).filter(org.springframework.util.StringUtils::hasText).toList();
@@ -176,7 +195,17 @@ public class DepartmentServiceImpl implements DepartmentService {
         dept.setDescription(request.getDescription());
     }
 
+    /** 一次取回全部 id -> parent_id，在内存里向上回溯，避免按层级逐次查库 */
     private boolean wouldCreateCycle(Long id, Long newParentId) {
+        if (newParentId == null) {
+            return false;
+        }
+        Map<Long, Long> parents = new HashMap<>();
+        List<Department> all = departmentMapper.selectList(
+                new QueryWrapper<Department>().select("id", "parent_id"));
+        for (Department dept : all) {
+            parents.put(dept.getId(), dept.getParentId());
+        }
         Set<Long> visited = new HashSet<>();
         Long cursor = newParentId;
         while (cursor != null) {
@@ -186,13 +215,30 @@ public class DepartmentServiceImpl implements DepartmentService {
             if (!visited.add(cursor)) {
                 return true; // 已存在环，拒绝
             }
-            Department parent = departmentMapper.selectById(cursor);
-            cursor = parent == null ? null : parent.getParentId();
+            cursor = parents.get(cursor);
         }
         return false;
     }
 
     private DepartmentVO toVO(Department dept) {
+        return toVO(dept, managerNames(Collections.singletonList(dept.getManagerEmployeeId())));
+    }
+
+    /** 批量查负责人姓名，返回 id -> 姓名；无负责人时返回空 Map，不做无谓查询 */
+    private Map<Long, String> managerNames(Collection<Long> managerIds) {
+        List<Long> ids = managerIds == null ? List.of()
+                : managerIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> names = new HashMap<>();
+        for (Employee employee : employeeMapper.selectBatchIds(ids)) {
+            names.put(employee.getId(), employee.getEmployeeName());
+        }
+        return names;
+    }
+
+    private DepartmentVO toVO(Department dept, Map<Long, String> managerNames) {
         DepartmentVO vo = new DepartmentVO();
         vo.setId(dept.getId());
         vo.setDepartmentCode(dept.getDepartmentCode());
@@ -200,8 +246,7 @@ public class DepartmentServiceImpl implements DepartmentService {
         vo.setParentId(dept.getParentId());
         vo.setManagerEmployeeId(dept.getManagerEmployeeId());
         if (dept.getManagerEmployeeId() != null) {
-            Employee manager = employeeMapper.selectById(dept.getManagerEmployeeId());
-            vo.setManagerEmployeeName(manager == null ? null : manager.getEmployeeName());
+            vo.setManagerEmployeeName(managerNames.get(dept.getManagerEmployeeId()));
         }
         vo.setDescription(dept.getDescription());
         vo.setStatus(dept.getStatus());

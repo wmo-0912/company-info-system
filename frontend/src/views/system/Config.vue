@@ -1,5 +1,7 @@
 <template>
   <div class="page-card">
+    <el-alert type="info" :closable="false" show-icon class="tip"
+      title="company.name 与 company.logo.url 会作为登录页与侧栏的公司名称 / Logo 展示，保存后立即生效。" />
     <el-table v-loading="loading" :data="records">
       <el-table-column prop="configKey" label="配置键" width="220" />
       <el-table-column prop="configValue" label="配置值">
@@ -42,8 +44,10 @@ import { ElMessage } from 'element-plus'
 import { listConfigs, upsertConfig } from '@/api/system'
 import type { SysConfig } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
+import { useCompanyStore } from '@/stores/company'
 
 const auth = useAuthStore()
+const company = useCompanyStore()
 const records = ref<SysConfig[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -77,6 +81,10 @@ async function onSave() {
     await upsertConfig(current.value!.configKey, form.configValue || null, form.description || null)
     ElMessage.success('配置已保存')
     dialogVisible.value = false
+    // 公司名称 / Logo 同步到全局 store，登录页与侧栏无需刷新即可更新
+    if (current.value?.configKey.startsWith('company.')) {
+      await company.load(true)
+    }
     load()
   } finally {
     saving.value = false
@@ -85,3 +93,9 @@ async function onSave() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.tip {
+  margin-bottom: 12px;
+}
+</style>

@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, apiPut } from './http'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from './http'
 import type { DictionaryItem, DictionaryType } from './types'
 
 export interface DictTypeBody {
@@ -34,4 +34,20 @@ export function updateDictItem(id: number, body: DictItemBody) {
 
 export function changeDictItemStatus(id: number, enabled: boolean) {
   return apiPatch<void>(`/dictionary-items/${id}/status`, { enabled })
+}
+
+export function updateDictType(id: number, body: DictTypeBody) {
+  return apiPut<DictionaryType>(`/dictionaries/${id}`, body)
+}
+
+export function changeDictTypeStatus(id: number, enabled: boolean) {
+  return apiPatch<void>(`/dictionaries/${id}/status`, { enabled })
+}
+
+export function deleteDictType(id: number) {
+  return apiDelete<void>(`/dictionaries/${id}`)
+}
+
+export function deleteDictItem(id: number) {
+  return apiDelete<void>(`/dictionary-items/${id}`)
 }

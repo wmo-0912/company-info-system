@@ -1,21 +1,24 @@
 <template>
   <el-container class="layout">
     <el-aside width="220px" class="aside">
-      <div class="logo">公司信息管理系统</div>
+      <div class="logo">
+        <img v-if="company.logoUrl" :src="company.logoUrl" alt="公司 Logo" class="logo-img" />
+        <span v-else class="logo-text">{{ company.name }}</span>
+      </div>
       <el-menu :default-active="activePath" router background-color="#001529" text-color="#a6adb4"
         active-text-color="#ffffff" class="menu">
-        <template v-for="item in visibleMenus" :key="item.title">
-          <el-sub-menu v-if="item.children" :index="item.title">
+        <template v-for="item in menus" :key="item.code">
+          <el-sub-menu v-if="item.children.length" :index="item.code">
             <template #title>
-              <el-icon><component :is="item.icon" /></el-icon>
+              <el-icon><component :is="iconOf(item.icon)" /></el-icon>
               <span>{{ item.title }}</span>
             </template>
-            <el-menu-item v-for="child in item.children" :key="child.path" :index="child.path">
+            <el-menu-item v-for="child in item.children" :key="child.code" :index="child.path || child.code">
               {{ child.title }}
             </el-menu-item>
           </el-sub-menu>
-          <el-menu-item v-else :index="item.path">
-            <el-icon><component :is="item.icon" /></el-icon>
+          <el-menu-item v-else :index="item.path || item.code">
+            <el-icon><component :is="iconOf(item.icon)" /></el-icon>
             <span>{{ item.title }}</span>
           </el-menu-item>
         </template>
@@ -45,65 +48,57 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
   ArrowDown,
   Folder,
+  Menu as MenuIcon,
   OfficeBuilding,
   Odometer,
+  Postcard,
   Setting,
   Switch,
   TrendCharts,
   User
 } from '@element-plus/icons-vue'
+import { fetchMyMenus } from '@/api/menu'
+import type { MenuNode } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
-
-interface MenuItem {
-  title: string
-  path?: string
-  icon?: unknown
-  children?: { title: string; path: string }[]
-}
+import { useCompanyStore } from '@/stores/company'
 
 const auth = useAuthStore()
+const company = useCompanyStore()
 const route = useRoute()
 const router = useRouter()
 
-const menus: (MenuItem & { perm?: string })[] = [
-  { title: '首页仪表盘', path: '/', icon: Odometer, perm: 'dashboard:view' },
-  { title: '组织架构', path: '/departments', icon: OfficeBuilding, perm: 'department:read' },
-  { title: '员工管理', path: '/employees', icon: User, perm: 'employee:read' },
-  { title: '入转调离', path: '/employment', icon: Switch, perm: 'employment:submit' },
-  { title: '项目组', path: '/projects', icon: Folder, perm: 'project:read' },
-  { title: '绩效考核', path: '/performance', icon: TrendCharts, perm: 'performance:read' }
-]
+/** 菜单由服务端按权限点下发（见 GET /api/v1/menus），这里只负责把图标名映射成组件 */
+const ICONS: Record<string, unknown> = {
+  Odometer,
+  OfficeBuilding,
+  User,
+  Switch,
+  Folder,
+  TrendCharts,
+  Setting,
+  Postcard
+}
 
-const systemChildren = [
-  { title: '用户管理', path: '/system/users', perm: 'user:read' },
-  { title: '角色管理', path: '/system/roles', perm: 'role:read' },
-  { title: '数据字典', path: '/system/dictionaries', perm: 'dictionary:read' },
-  { title: '系统配置', path: '/system/config', perm: 'system:config:read' },
-  { title: '审计日志', path: '/system/audit-logs', perm: 'audit:read' }
-]
+const menus = ref<MenuNode[]>([])
 
-const visibleMenus = computed<MenuItem[]>(() => {
-  const result: MenuItem[] = []
-  for (const m of menus) {
-    if (m.perm && auth.has(m.perm)) {
-      result.push({ title: m.title, path: m.path, icon: m.icon, children: m.children })
-    }
+function iconOf(name: string | null) {
+  return (name && ICONS[name]) || MenuIcon
+}
+
+onMounted(async () => {
+  company.load()
+  try {
+    menus.value = await fetchMyMenus()
+  } catch {
+    // 401 由 http 拦截器统一处理为跳登录，其余错误保持空菜单，避免整页白屏
+    menus.value = []
   }
-  const sysItems = systemChildren.filter((c) => auth.has(c.perm))
-  if (sysItems.length) {
-    result.push({
-      title: '系统管理',
-      icon: Setting,
-      children: sysItems.map((c) => ({ title: c.title, path: c.path }))
-    })
-  }
-  return result
 })
 
 const activePath = computed(() => {
@@ -111,10 +106,14 @@ const activePath = computed(() => {
   return route.path
 })
 
+/** 个人中心入口固定在右上角用户菜单，不在侧边栏，标题从菜单里取不到，单独兜底 */
+const STATIC_TITLES: Record<string, string> = { '/profile': '个人中心' }
+
 const currentTitle = computed(() => {
-  for (const m of visibleMenus.value) {
-    if (m.path === route.path) return m.title
-    const child = m.children?.find((c) => route.path.startsWith(c.path))
+  if (STATIC_TITLES[route.path]) return STATIC_TITLES[route.path]
+  for (const m of menus.value) {
+    if (m.path && m.path === route.path) return m.title
+    const child = m.children.find((c) => !!c.path && route.path.startsWith(c.path))
     if (child) return child.title
   }
   return ''
@@ -141,12 +140,26 @@ async function onCommand(command: string) {
 }
 
 .logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 60px;
-  line-height: 60px;
-  text-align: center;
+  padding: 0 12px;
   color: #fff;
   font-size: 16px;
   font-weight: 600;
+}
+
+.logo-img {
+  max-height: 36px;
+  max-width: 196px;
+  object-fit: contain;
+}
+
+.logo-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menu {
