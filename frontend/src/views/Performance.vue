@@ -67,7 +67,7 @@
         v-model:page-size="pageSize" v-model:current-page="page" :page-sizes="[10, 20, 50]" @change="load" />
     </template>
 
-    <template v-else>
+    <template v-else-if="tab === 'my'">
       <el-table v-loading="myLoading" :data="myRecords">
         <el-table-column label="周期类型" width="100">
           <template #default="{ row }">{{ dictLabel('periodType', row.periodType) }}</template>

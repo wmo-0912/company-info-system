@@ -1,78 +1,75 @@
 <template>
   <div class="page-card">
-    <el-row :gutter="16">
-      <el-col :span="8">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>字典类型</span>
-              <el-button v-if="auth.has('dictionary:manage')" size="small" type="primary" @click="openTypeDialog()">
-                新建类型
-              </el-button>
+    <el-card shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>字典类型</span>
+          <el-button v-if="auth.has('dictionary:manage')" size="small" type="primary" @click="openTypeDialog()">
+            新建类型
+          </el-button>
+        </div>
+      </template>
+      <el-table v-loading="typeLoading" :data="types" highlight-current-row @current-change="onTypeSelect">
+        <el-table-column prop="dictCode" label="编码" width="160" />
+        <el-table-column prop="dictName" label="名称" />
+        <el-table-column label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.has('dictionary:manage')" label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <div class="cell-actions">
+              <el-button link type="primary" @click.stop="openTypeDialog(row)">编辑</el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => onTypeCommand(cmd, row)">
+                <el-button link type="primary" @click.stop>更多</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="toggle">{{ row.enabled ? '停用' : '启用' }}</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </template>
-          <el-table v-loading="typeLoading" :data="types" highlight-current-row @current-change="onTypeSelect">
-            <el-table-column prop="dictCode" label="编码" width="120" />
-            <el-table-column prop="dictName" label="名称" />
-            <el-table-column label="状态" width="80">
-              <template #default="{ row }">
-                <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="auth.has('dictionary:manage')" label="操作" width="140" fixed="right">
-              <template #default="{ row }">
-                <el-button link type="primary" @click.stop="openTypeDialog(row)">编辑</el-button>
-                <el-dropdown trigger="click" @command="(cmd: string) => onTypeCommand(cmd, row)">
-                  <el-button link type="primary" @click.stop>更多</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="toggle">{{ row.enabled ? '停用' : '启用' }}</el-dropdown-item>
-                      <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </template>
-            </el-table-column>
-            <template #empty>
-              <el-empty description="暂无字典类型" />
-            </template>
-          </el-table>
-        </el-card>
-      </el-col>
-      <el-col :span="16">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>{{ currentType ? `字典项 - ${currentType.dictName}` : '请选择左侧字典类型' }}</span>
-              <el-button v-if="auth.has('dictionary:manage') && currentType" size="small" type="primary"
-                @click="openItemDialog()">新建字典项</el-button>
-            </div>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无字典类型" />
+        </template>
+      </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="item-card">
+      <template #header>
+        <div class="card-header">
+          <span>{{ currentType ? `字典项 - ${currentType.dictName}` : '请先在上方选择字典类型' }}</span>
+          <el-button v-if="auth.has('dictionary:manage') && currentType" size="small" type="primary"
+            @click="openItemDialog()">新建字典项</el-button>
+        </div>
+      </template>
+      <el-table v-loading="itemLoading" :data="items">
+        <el-table-column prop="itemCode" label="项编码" width="140" />
+        <el-table-column prop="itemLabel" label="项名称" />
+        <el-table-column prop="sortOrder" label="排序" width="80" />
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
           </template>
-          <el-table v-loading="itemLoading" :data="items">
-            <el-table-column prop="itemCode" label="项编码" width="140" />
-            <el-table-column prop="itemLabel" label="项名称" />
-            <el-table-column prop="sortOrder" label="排序" width="80" />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="auth.has('dictionary:manage')" label="操作" width="150" fixed="right">
-              <template #default="{ row }">
-                <el-button link type="primary" @click="openItemDialog(row)">编辑</el-button>
-                <el-button link :type="row.enabled ? 'danger' : 'success'" @click="onToggleItem(row)">
-                  {{ row.enabled ? '停用' : '启用' }}
-                </el-button>
-                <el-button link type="danger" @click="onDeleteItem(row)">删除</el-button>
-              </template>
-            </el-table-column>
-            <template #empty>
-              <el-empty description="暂无字典项" />
-            </template>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+        </el-table-column>
+        <el-table-column v-if="auth.has('dictionary:manage')" label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openItemDialog(row)">编辑</el-button>
+            <el-button link :type="row.enabled ? 'danger' : 'success'" @click="onToggleItem(row)">
+              {{ row.enabled ? '停用' : '启用' }}
+            </el-button>
+            <el-button link type="danger" @click="onDeleteItem(row)">删除</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="暂无字典项" />
+        </template>
+      </el-table>
+    </el-card>
 
     <el-dialog v-model="typeVisible" :title="editingType ? '编辑字典类型' : '新建字典类型'" width="420px" destroy-on-close>
       <el-form ref="typeFormRef" :model="typeForm" :rules="typeRules" label-width="90px">
@@ -290,5 +287,25 @@ onMounted(loadTypes)
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* 类型表在上、字典项表在下：两表列宽都能完整铺开，
+   窄窗口下也不会互相挤压导致列被挤出可视区 */
+.item-card {
+  margin-top: 16px;
+}
+
+/* 操作列：el-dropdown 默认 vertical-align: top，与相邻的 link 按钮基线不一致，
+   这里用 flex 容器统一垂直居中，避免「编辑 / 更多」上下错位 */
+.cell-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  line-height: 1;
+}
+
+.cell-actions :deep(.el-dropdown) {
+  vertical-align: middle;
+  line-height: 1;
 }
 </style>
